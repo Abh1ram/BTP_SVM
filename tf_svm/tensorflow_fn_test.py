@@ -1,16 +1,20 @@
 import numpy as np
 import tensorflow as tf
 
-feat = np.array([1,2,3])
-labels = np.array([1,2,3])
+age = np.arange(4) * 1.0
+height = np.arange(32, 36)
+x = {'age': age, 'height': height}
+y = np.arange(-32, -28)
 
-with tf.Session() as session:
-    fn = tf.estimator.inputs.numpy_input_fn(
-        x = {"x": feat},
-        y = labels,
-        shuffle=False
-        )
+with tf.Session() as sess:
 
-    for i in range(3):
-        tup = fn()
-        print(tup[0]["x"], tup[1])
+  input_fn = tf.estimator.inputs.numpy_input_fn(
+      x, y, batch_size=2, shuffle=False, num_epochs=1)
+
+  for i in range(3):
+      tup = input_fn()
+      sess.run(tup)
+  # print(sess.run(tup))
+
+
+# featrs = [tf.feature_column.numeric_column()]
