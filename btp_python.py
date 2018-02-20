@@ -2,6 +2,8 @@
 # as they could be used for add supp to R
 
 # Online SVM - Cauwenberghs algorithm
+import hashlib
+
 import numpy as np
 
 from matplotlib import colors
@@ -20,6 +22,25 @@ def is_close(a, b):
   if abs(a-b) < float_threshold:
     return True
 
+def memoize(kernel_fn):
+  cache = dict()
+
+  def memoized_fn(x1, x2):
+    x1_h = x1.view(np.uint8)
+    x1_h = hashlib.sha1(x1_h).hexdigest()
+
+    x2_h = x2.view(np.uint8)
+    x2_h = hashlib.sha1(x2_h).hexdigest()
+    if (x1_h, x2_h) in cache:
+      return cache[(x1_h,x2_h)]
+    else:
+      result = kernel_fn(x1, x2)
+      cache[(x1_h, x2_h)] = result
+      return result
+
+  return memoized_fn
+
+@memoize
 def kernel(x1, x2):
   # apply the kernel
   return np.dot(x1, x2)
@@ -37,6 +58,9 @@ class SVM_Online:
       self.file_type = file_type
       # All data
       self.x_all, self.y_all = extract_data(filename, file_type)
+      self.x_all = self.x_all[:500]
+      self.y_all = self.y_all[:500]
+
 
     else:
       self.x_all = X
@@ -184,6 +208,8 @@ class SVM_Online:
     return beta_, gamma_, beta_sup 
 
   def dec_bdry(self, start=0, last=1):
+    if self.x_all.shape[1] != 2:
+      return
     # get a1 and a2 for a1x+a2y+b=0
     w = np.zeros((2,))
     for _, indx in enumerate(self.Margin_v + self.Error_v):
@@ -466,6 +492,19 @@ class SVM_Online:
 
 
 if __name__ == "__main__":
-  svm = SVM_Online(filename="data_1.csv", file_type="csv", C_svm=1)
+  svm = SVM_Online(filename="diabetes.mat", file_type="mat", C_svm=5)
   svm.train_all()
-  
+  # print(svm.Margin_v)
+  # print(len(svm.Error_v))
+  # x_test, y_test = extract_data("diabetes.mat", "mat")
+  # x_test = x_test[576:]
+  # y_test = y_test[576:]
+  # cor = 0
+  # mismatch = 0
+  # for i in range(x_test.shape[0]):
+  #     if svm.predict(x_test[i]) == (y_test[i]):
+  #         cor += 1
+  #     if svm.predict(x_test[i]) != (y_test[i]):
+  #         mismatch += 1
+  # print(cor, mismatch)
+

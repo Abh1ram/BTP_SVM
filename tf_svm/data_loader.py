@@ -1,6 +1,5 @@
 # handling data from different inputs
 import numpy as np
-import scipy.io as sio
 
 from scipy.io import arff
 from sklearn.datasets import load_svmlight_file
@@ -10,16 +9,8 @@ def extract_data(filename, file_type):
         "csv"       : get_csv_data,
         "arff"      : get_arff_data,
         "svmlight"  : get_svmlight_data,
-        "mat"       : get_mat_data
   }
   return func_mapper[file_type](filename)
-
-def get_mat_data(filename="diabetes.mat"):
-  mat_contents = sio.loadmat(filename)
-  y_all = mat_contents["y"]
-  y_all = y_all.reshape(y_all.shape[0])
-  return mat_contents["x_norm"], y_all
-
 
 def get_arff_data(filename="iris.arff"):
 

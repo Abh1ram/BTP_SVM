@@ -1,20 +1,23 @@
-import numpy as np
+# import numpy as np
 import tensorflow as tf
 
-age = np.arange(4) * 1.0
-height = np.arange(32, 36)
-x = {'age': age, 'height': height}
-y = np.arange(-32, -28)
+def get_index(tens_, val):
+  i = tf.constant(0)
+  sz = tf.shape(tens_)[0]
+  c = lambda i: tf.logical_and(tf.less(i ,sz), 
+    tf.not_equal(tens_[i], val))
+  b = lambda i: tf.add(i, 1)
+  r = tf.while_loop(c, b, [i])
+  # assert r is  tensor of rank 0
+  return r
+
+tens = tf.constant([])
+val = tf.constant(4)
+r = (tf.map_fn(lambda i: i, tens))
+# (tens, val)
 
 with tf.Session() as sess:
-
-  input_fn = tf.estimator.inputs.numpy_input_fn(
-      x, y, batch_size=2, shuffle=False, num_epochs=1)
-
-  for i in range(3):
-      tup = input_fn()
-      sess.run(tup)
-  # print(sess.run(tup))
-
-
-# featrs = [tf.feature_column.numeric_column()]
+    print(sess.run(r))
+# # NOTES:
+# # The cache seems to be storing the name of the value instead of the tensor value
+# # Think of a way to store the tensor value rather than
