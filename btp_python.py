@@ -22,25 +22,25 @@ def is_close(a, b):
   if abs(a-b) < float_threshold:
     return True
 
-def memoize(kernel_fn):
-  cache = dict()
+# def memoize(kernel_fn):
+#   cache = dict()
 
-  def memoized_fn(x1, x2):
-    x1_h = x1.view(np.uint8)
-    x1_h = hashlib.sha1(x1_h).hexdigest()
+#   def memoized_fn(x1, x2):
+#     x1_h = x1.view(np.uint8)
+#     x1_h = hashlib.sha1(x1_h).hexdigest()
 
-    x2_h = x2.view(np.uint8)
-    x2_h = hashlib.sha1(x2_h).hexdigest()
-    if (x1_h, x2_h) in cache:
-      return cache[(x1_h,x2_h)]
-    else:
-      result = kernel_fn(x1, x2)
-      cache[(x1_h, x2_h)] = result
-      return result
+#     x2_h = x2.view(np.uint8)
+#     x2_h = hashlib.sha1(x2_h).hexdigest()
+#     if (x1_h, x2_h) in cache:
+#       return cache[(x1_h,x2_h)]
+#     else:
+#       result = kernel_fn(x1, x2)
+#       cache[(x1_h, x2_h)] = result
+#       return result
 
-  return memoized_fn
+#   return memoized_fn
 
-@memoize
+# @memoize
 def kernel(x1, x2):
   # apply the kernel
   return np.dot(x1, x2)
@@ -144,8 +144,10 @@ class SVM_Online:
       indx = self.Margin_v[i]
       beta_calc[i+1][0] = calc_Q(self.get_x(indx), self.y_all[indx], x_c, y_c)
 
+    # print(self.Q_, beta_calc)
     beta_calc = np.append(beta_calc, [[calc_Q(x_c, y_c, x_c, y_c)]], axis=0)
 
+    # print(self.Q_, beta_calc)
     Q_temp = np.concatenate( (self.Q_, beta_calc.transpose()[:,:-1]), axis=0)
     self.Q_ = np.concatenate( (Q_temp, beta_calc), axis=1)
     self.R_ = np.linalg.inv(self.Q_)
@@ -240,7 +242,7 @@ class SVM_Online:
         print("AT: ", ii)
         print("Margin_v: ", len(self.Margin_v))
         print("Iterations: ", self.tot_iter)
-      self.__learn(self.get_x(ii), self.y_all[ii])
+      self.learn(self.get_x(ii), self.y_all[ii])
 
     print("Time taken: ", time()-t1)
     # print("----------------------DONE---------------------------")
@@ -370,8 +372,55 @@ class SVM_Online:
     self.remove_pt(rem_indx)
     return classification_flag
 
+
+  def handle_empty_marg_set(self):
+    n = self.n
+    x_c = self.x_all[n-1]
+    y_c = self.y_all[n-1]
+    # calculate min possible b from candidate vector
+    min_del_b = -self.g_all[n-1]/y_c
+    # calc min possible increment in b from remain vectors
+    for indx in self.Error_v:
+      if self.y_all[indx]*y_c > 0:
+        del_b = -self.g_all[indx]/self.y_all[indx]
+        if min_del_b >= 0:
+          min_del_b = min(min_del_b, del_b)
+        else:
+          # It should actually be -1* min(abs(min_del_b), abs(del_b)))
+          min_del_b = max(min_del_b, del_b)
+
+    for indx in self.Remain_v:
+      if self.y_all[indx]*y_c < 0:
+        del_b = -self.g_all[indx]/self.y_all[indx]
+        if min_del_b >= 0:
+          min_del_b = min(min_del_b, del_b)
+        else:
+          # It should actually be -1* min(abs(min_del_b), abs(del_b)))
+          min_del_b = max(min_del_b, del_b)
+    # update b
+    self.b_ += min_del_b
+    for indx in self.Error_v + self.Remain_v + [n-1]:
+      self.g_all[indx] += self.y_all[indx]*min_del_b
+    # Move zero g vectors to margin support vector set if they satisy the direction
+    # of movement 
+    # if self.g_all[n-1] == 0:
+    #   self.add_support_R(n-1)
+    #   print("Free moved ", n-1)
+
+    for indx in self.Remain_v:
+      if self.y_all[indx]*y_c < 0 and self.g_all[indx] == 0:
+        self.add_support_R(indx)
+        self.Margin_v.append(indx)
+        self.Remain_v.remove(indx)
+
+    for indx in self.Error_v:
+      if self.y_all[indx]*y_c > 0 and self.g_all[indx] == 0:
+        self.add_support_R(indx)
+        self.Margin_v.append(indx)
+        self.Error_v.remove(indx)
+
 # Not to be called directly
-  def __learn(self, x_c, y_c):
+  def learn(self, x_c, y_c):
     # Assumption: the point has already been added
     self.n += 1
     n = self.n
@@ -380,6 +429,12 @@ class SVM_Online:
 
     g_c = self.calc_g(x_c, y_c)
     self.g_all.append(g_c)
+    # print("\n\nStarting\nMargin Vectors: %s \n Error vectors: %s" %(self.Margin_v,
+    #   self.Error_v))
+    # print("b: ", self.b_)
+    # print("g: ", g_c)
+    # print("alpha: ", self.alpha_all)
+    # input()
     # Add candidate to Remaining vector      
     if (g_c > 0):
       # add threshold check to add into the list
@@ -390,19 +445,9 @@ class SVM_Online:
       while True:
         # DEBUG: Counting number of iterations
         self.tot_iter += 1
-        # Break conditions
-        # IF candidate vector g is zero - Margin vector
-        # Numerical floating point check
-        if is_close(self.g_all[n-1], 0):
-          self.add_support_R(n-1)
-          self.Margin_v.append(n-1)
-          # print("Will this even happen?")
-          break
-        # If candidate vector alpha is equal to C_svm - Error vector
-        if (is_close(self.alpha_all[n-1], 5)):
-          self.Error_v.append(n-1)
-          # print("Will this even happen?")
-          break
+        # Handling zero support vectors case
+        if len(self.Margin_v) == 0:
+          self.handle_empty_marg_set()
 
         beta_, gamma_, beta_sup = self.get_beta_gamma(x_c, y_c)
         # 1 for candidate - inconseq
@@ -447,7 +492,37 @@ class SVM_Online:
             # ------ REMOVE THIS
             break
 
-        flag = False
+        # DEBUG
+        # if n >0:
+        #   print("MArg: ", self.Margin_v)
+        #   print("Err: ", self.Error_v)
+        #   print("Remain: ", self.Remain_v)
+        #   print("G: ", self.g_all)
+        #   print("ALL ALPAH: ", self.alpha_all)
+        #   print("gamma_: ", gamma_)
+        #   print("TRANS: ", transition_alpha)
+        #   print("VECS: ", transition_vectors)
+        #   input()
+
+        # print(transition_vectors)
+          # --------TO DO---------------------
+          # When adding the element to Margin_v, pass beta_sup to prevent recalculation
+          # elif elem_index == n-1:
+          #   if transition_alpha[n-1] == (self.C_svm - self.alpha_all[n-1]):
+          #     self.Error_v.append(elem_index)
+          #   else:
+          #     self.add_support_R(elem_index)
+          #     self.Margin_v.append(elem_index)
+          #   flag = True
+
+        # recompute alpha and g
+        for i in range(n):
+          self.alpha_all[i] += min_alpha * beta_[i]
+          self.g_all[i] += min_alpha * gamma_[i]
+
+        # recompute b
+        self.b_ += beta_sup[0][0] * min_alpha
+        # Book-keeping
         for elem_index in transition_vectors:
           if elem_index in self.Margin_v:
             # remove elem_index from R
@@ -470,30 +545,27 @@ class SVM_Online:
             self.Remain_v.remove(elem_index)
             self.Margin_v.append(elem_index)
 
-          # --------TO DO---------------------
-          # When adding the element to Margin_v, pass beta_sup to prevent recalculation
-          elif elem_index == n-1:
-            if transition_alpha[n-1] == (self.C_svm - self.alpha_all[n-1]):
-              self.Error_v.append(elem_index)
-            else:
-              self.add_support_R(elem_index)
-              self.Margin_v.append(elem_index)
-            flag = True
-
-        # recompute alpha and g
-        for i in range(n):
-          self.alpha_all[i] += min_alpha * beta_[i]
-          self.g_all[i] += min_alpha * gamma_[i]
-
-        # recompute b
-        self.b_ += beta_sup[0][0] * min_alpha
-        if (flag):
+        # Break conditions
+        # IF candidate vector g is zero - Margin vector
+        # Numerical floating point check
+        if is_close(self.g_all[n-1], 0):
+          self.add_support_R(n-1)
+          self.Margin_v.append(n-1)
+          break
+        # If candidate vector alpha is equal to C_svm - Error vector
+        # print("HERE: ", self.alpha_all[n-1], is_close(self.alpha_all[n-1], 5))
+        if (is_close(self.alpha_all[n-1], self.C_svm)):
+          self.Error_v.append(n-1)
           break
 
 
+
 if __name__ == "__main__":
-  svm = SVM_Online(filename="diabetes.mat", file_type="mat", C_svm=5)
+  svm = SVM_Online(filename="data_1.csv", file_type="csv", C_svm=1)
   svm.train_all()
+  print(svm.Margin_v)
+  print(len(svm.Error_v))
+  svm.dec_bdry()
   # print(svm.Margin_v)
   # print(len(svm.Error_v))
   # x_test, y_test = extract_data("diabetes.mat", "mat")
