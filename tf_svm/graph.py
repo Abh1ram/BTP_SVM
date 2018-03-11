@@ -10,11 +10,14 @@
 # TF logical_and runs second terms even if first term fails
 # Asynchronous prints
 # 5. In while loop variables are not read after first run, i.e. other
-# than loop vars no other ones run
-
-
+# than loop vars no other ones run - https://github.com/tensorflow/tensorflow/issues/13616
+# 6. tf cond expects same nested structure?? - How come this problem didn;t come up with
+# other tf cond
+# 7. https://github.com/tensorflow/tensor2tensor/issues/159
 
 import tensorflow as tf
+
+from collections import namedtuple
 
 from data_loader import extract_data
 
@@ -91,90 +94,101 @@ def calc_g(params, x_, y_):
   # g(x, y) = f(x)*y - 1 
   return (calc_f(params, x_) * y_) - 1.
 
-def rem_from(vec_set, g_vec, loc_index):
-  # Remove vector from vec_set
-  vec_set_tens = vec_set.read_value()
-  upd_vec = tf.assign(vec_set, 
-    tf.concat([vec_set_tens[:loc_index], vec_set_tens[loc_index+1:]], 0))
+def rem_from_err(loc_index, loop_var):
+  err_vec_ = loop_var.err_vec
+  g_err_ = loop_var.g_err
+
+  err_vec_ = tf.concat([err_vec_[:loc_index], err_vec_[loc_index+1:]], 0)
   # REmove g val of the vector
-  g_vec_tens = g_vec.read_value()
-  upd_g = tf.assign(g_vec,
-    tf.concat([g_vec_tens[:loc_index], g_vec_tens[loc_index+1:]], 0))
+  g_err_ = tf.concat([g_err_[:loc_index], g_err_[loc_index+1:]], 0)
   # Force the above two operations
-  with tf.control_dependencies([upd_vec, upd_g]):
-    return tf.constant(1.)
+  return loop_var._replace(err_vec=err_vec_, g_err=g_err_)
 
-def add_to_err(g_c, glob_index):
-    err_vec_ = tf.get_variable("err_vec", dtype=tf.int32)
-    g_err_ = tf.get_variable("g_err")
-    # Add new index to err_vec
-    op1 = tf.assign(err_vec_, 
-      tf.concat([err_vec_.read_value(), [glob_index]], 0),
-      validate_shape=False)
-    # Add new index g to g_err
-    op2 = tf.assign(g_err_,
-      tf.concat([g_err_.read_value(), [g_c]], 0),
-      validate_shape=False)
-    with tf.control_dependencies([op1, op2]):
-      return tf.constant(1.)
+def rem_from_rem(loc_index, loop_var):
+  rem_vec_ = loop_var.rem_vec
+  g_rem_ = loop_var.g_rem
 
-# TODO: Add the reserve threshold check
-def add_to_rem(eps, g_c, glob_index):
-  rem_vec_ = tf.get_variable("rem_vec", dtype=tf.int32)
-  g_rem_ = tf.get_variable("g_rem")
+  rem_vec_ = tf.concat([rem_vec_[:loc_index], rem_vec_[loc_index+1:]], 0)
+  # REmove g val of the vector
+  g_rem_ = tf.concat([g_rem_[:loc_index], g_rem_[loc_index+1:]], 0)
+  # Force the above two operations
+  return loop_var._replace(rem_vec=rem_vec_, g_rem=g_rem_)
+
+def add_to_err(g_c, glob_index, loop_var):
+  err_vec_ = loop_var.err_vec
+  g_err_ = loop_var.g_err
   # Add new index to rem_vec
-  op1 = tf.assign(rem_vec_,
-    tf.concat([rem_vec_.read_value(), tf.reshape(glob_index, [1])], 0),
-    validate_shape=False)
+  err_vec_ = tf.concat([err_vec_, tf.reshape(glob_index, [1])], 0)
+
   # Add g_c to g_rem
-  op2 = tf.assign(g_rem_, 
-    tf.concat([g_rem_.read_value(), tf.reshape(g_c, [1])], 0),
-    validate_shape=False)
-  # Force the above operations to run
-  with tf.control_dependencies([op1, op2]):
-    # ans = tf.Print(tf.constant(1.), [op1, op2])
-    return tf.constant(1.)
+  g_err_ = tf.concat([g_err_, tf.reshape(g_c, [1])], 0)
+
+  loop_var = loop_var._replace(err_vec=err_vec_, g_err=g_err_)
+  return loop_var
+
+# Returns updated loop_var
+# TODO: Add the reserve threshold check
+def add_to_rem(eps, g_c, glob_index, loop_var=None):
+  if loop_var is not None:
+    rem_vec_ = loop_var.rem_vec
+    g_rem_ = loop_var.g_rem
+    # Add new index to rem_vec
+    rem_vec_ = tf.concat([rem_vec_, tf.reshape(glob_index, [1])], 0)
+    # Add g_c to g_rem
+    g_rem_ = tf.concat([g_rem_, tf.reshape(g_c, [1])], 0)
+    loop_var = loop_var._replace(rem_vec=rem_vec_, g_rem=g_rem_)
+    return loop_var
+
+  else:
+    rem_vec_ = tf.get_variable("rem_vec", dtype=tf.int32)
+    g_rem_ = tf.get_variable("g_rem")
+    op1 = tf.assign(rem_vec_, tf.concat(
+      [rem_vec_.read_value(), tf.reshape(glob_index, [1])], 0))
+    # Add g_c to g_rem
+    op2 = tf.assign(g_rem_, tf.concat(
+      [g_rem_.read_value(), tf.reshape(g_c, [1])], 0))
+    with tf.control_dependencies([op1, op2]):
+      return tf.constant(1)
+  
 
 # Terminate if candidate g_c equals 0 or candidate alpha_c equals C
-def termn_condn(C_svm, alpha_c, g_c):
-  print_op = tf.Print(tf.constant(0), [tf.constant("TREM CONDN"), alpha_c, g_c])
+def termn_condn(C_svm, loop_var):
+  print_op = tf.Print(tf.constant(0), [tf.constant("TREM CONDN"),
+   loop_var.alpha_c, loop_var.g_c])
   with tf.control_dependencies([print_op]):
-    return tf.logical_or(tf.equal(g_c, 0), tf.equal(alpha_c, C_svm))
+    return tf.logical_or(tf.equal(loop_var.g_c, 0.),
+      tf.equal(loop_var.alpha_c, C_svm))
 
 # TODO: do matrix inverse when size is one/inf
 # Calculates the co-efficient sensitivities
-def get_beta(kernel_fn, x_all_, y_all_, glob_index):
-  marg_vec_ = tf.get_variable("marg_vec", dtype=tf.int32).read_value()
-  R_ = tf.get_variable("R").read_value()
+def get_beta(kernel_fn, x_all_, y_all_, glob_index, marg_vec_, R_):
+  # marg_vec_ = tf.get_variable("marg_vec", dtype=tf.int32).read_value()
+  # R_ = tf.get_variable("R").read_value()
+  # with tf.control_dependencies(None):
+    x_c = x_all_[glob_index]
+    y_c = y_all_[glob_index]
 
-  x_c = x_all_[glob_index]
-  y_c = y_all_[glob_index]
-
-  # Calculating Q_(s_i, c) = y_all[s_i]*y_c*
-  temp_q = tf.cond(tf.equal(tf.shape(marg_vec_)[0], 0),
-    lambda: tf.constant([]),
-    lambda: tf.map_fn(
-            lambda i: y_c * y_all_[i] * kernel_fn(x_c, x_all_[i]), 
-            marg_vec_, dtype=tf.float32, name="BETA_MAP"),
-    name="BETA_COND")
-  # Add y_c as the first element
-  temp_q = tf.concat([tf.reshape(y_c, [1,]), temp_q], 0)
-  # reshape temp_q from (n,) to (n,1)/ rank 1 to rank 2 for matmul
-  temp_q = tf.reshape(temp_q, [tf.shape(temp_q)[0], 1])
-  # temp_q_p = tf.Print(temp_q, [tf.constant("LINE 150, BETA_CALC: "),
-  #   tf.shape(x_all_), temp_q, R_])
-  # print_op = tf.map_fn(lambda i: tf.Print(i, [i]), R_)
-  # with tf.control_dependencies([print_op]):
-  beta = -1 * tf.matmul(R_, temp_q)
-  return tf.reshape(beta, [tf.shape(beta)[0]])
+    # Calculating Q_(s_i, c) = y_all[s_i]*y_c*
+    temp_q = tf.cond(tf.equal(tf.shape(marg_vec_)[0], 0),
+      lambda: tf.constant([]),
+      lambda: tf.map_fn(
+              lambda i: y_c * y_all_[i] * kernel_fn(x_c, x_all_[i]), 
+              marg_vec_, dtype=tf.float32, name="BETA_MAP"),
+      name="BETA_COND")
+    # Add y_c as the first element
+    temp_q = tf.concat([tf.reshape(y_c, [1,]), temp_q], 0)
+    # reshape temp_q from (n,) to (n,1)/ rank 1 to rank 2 for matmul
+    temp_q = tf.reshape(temp_q, [tf.shape(temp_q)[0], 1])
+    # temp_q_p = tf.Print(temp_q, [tf.constant("LINE 150, BETA_CALC: "),
+    #   tf.shape(x_all_), temp_q, R_])
+    # print_op = tf.map_fn(lambda i: tf.Print(i, [i]), R_)
+    # with tf.control_dependencies([print_op]):
+    beta = -1 * tf.matmul(R_, temp_q)
+    return tf.reshape(beta, [tf.shape(beta)[0]])
 
 # Computes SUM(Q_ij*B_j)
-def gamma_helper_fn(kernel_fn, beta_, indx, x_all_, y_all_, n):
+def gamma_helper_fn(kernel_fn, beta_, indx, x_all_, y_all_, n, marg_vec_):
   # with tf.variable_scope(scope, reuse=True):
-    marg_vec_ = tf.get_variable("marg_vec", dtype=tf.int32).read_value()
-    # x_all_ = tf.get_variable("x_all")
-    # y_all_ = tf.get_variable("y_all")
-    # n = tf.get_variable("n").read_value()
 
     iter_tensor = tf.range(tf.shape(marg_vec_)[0])
     # iter_tensor = tf.Print(iter_tensor_1, [tf.constant("GAMMA HELPER FN"), 
@@ -194,7 +208,7 @@ def gamma_helper_fn(kernel_fn, beta_, indx, x_all_, y_all_, n):
 
 # Making this more distributed
 # vec is a tensor of indices for which gamma needs to be computed
-def get_gamma(kernel_fn, vec, beta_, x_all_, y_all_, n):
+def get_gamma(kernel_fn, vec, beta_, x_all_, y_all_, n, marg_vec_):
   x_c = x_all_[n-1]
   y_c = y_all_[n-1]
   # vec = tf.Print(vec_1, [tf.constant("---------------Line 174"), beta_,
@@ -204,19 +218,20 @@ def get_gamma(kernel_fn, vec, beta_, x_all_, y_all_, n):
     lambda: tf.map_fn(
       lambda i: (y_all_[i]*y_c*kernel_fn(x_all_[i], x_c) + 
         beta_[0]*y_all_[i] +
-        gamma_helper_fn(kernel_fn, beta_, i, x_all_, y_all_, n)),
+        gamma_helper_fn(kernel_fn, beta_, i, x_all_, y_all_, n, marg_vec_)),
       vec,
       dtype=tf.float32)
     )
 
 # TODO: Take beta as arg to prevent recalculation in case of new candidate vector
-def add_to_marg_supp(kernel_fn, glob_index, gamma, alpha, x_all_, y_all_):
+def add_to_marg_supp(kernel_fn, glob_index, gamma, alpha, x_all_,
+  y_all_, loop_var):
   # with tf.variable_scope(scope, reuse=True):
-  R_ = tf.get_variable("R")
-  marg_vec_ = tf.get_variable("marg_vec", dtype=tf.int32)
-  alpha_marg_ = tf.get_variable("alpha_marg")
+  R_ = loop_var.R
+  marg_vec_ = loop_var.marg_vec
+  alpha_marg_ = loop_var.alpha_marg
 
-  beta_indx = get_beta(kernel_fn, x_all_, y_all_, glob_index)
+  beta_indx = get_beta(kernel_fn, x_all_, y_all_, glob_index, marg_vec_, R_)
   beta_indx = tf.concat([beta_indx, [1]], 0)
   beta_shp = tf.shape(beta_indx)[0]
 
@@ -227,22 +242,17 @@ def add_to_marg_supp(kernel_fn, glob_index, gamma, alpha, x_all_, y_all_):
   beta_mat = 1/gamma * beta_mat
 
   # reshape R - will this be a problem while distributin???
-  R_tens = R_.read_value()
+  R_tens = R_
   R_tens = tf.concat([R_tens, tf.zeros([1, beta_shp-1])], 0)
   R_tens = tf.concat([R_tens, tf.zeros([beta_shp, 1])], 1)
 
-  upd_R = tf.assign(R_, R_tens + beta_mat, validate_shape=False)
+  R_ = R_tens + beta_mat
   # add index to marg_vec_
-  upd_marg = tf.assign(marg_vec_,
-    tf.concat([marg_vec_.read_value(), tf.reshape(glob_index, [1])], 0),
-    validate_shape=False)
+  marg_vec_ = tf.concat([marg_vec_, tf.reshape(glob_index, [1])], 0)
   # add alpha to alpha_marg_
-  upd_alpha = tf.assign(alpha_marg_,
-    tf.concat([alpha_marg_.read_value(), tf.reshape(alpha, [1])], 0),
-    validate_shape=False)
+  alpha_marg_ = tf.concat([alpha_marg_, tf.reshape(alpha, [1])], 0),
   # Force the above two operations
-  with tf.control_dependencies([upd_R, upd_alpha, upd_marg]):
-    return tf.constant(1.)
+  return loop_var._replace(R=R_, alpha_marg=alpha_marg_, marg_vec=marg_vec_)
 
 # I need to test this function
 def rem_helper(elem, R_, sz, k):
@@ -251,22 +261,21 @@ def rem_helper(elem, R_, sz, k):
   return R_[i][j] - (1/R_[k][k])*R_[i][k]*R_[k][j]
 
 # Need to assert that this value is same inverting Q_
-def rem_from_marg_sup(kernel_fn, loc_index):
+def rem_from_marg_sup(kernel_fn, loc_index, loop_var):
   # with tf.variable_scope(scope, reuse=True):
-  R_ = tf.get_variable("R")
-  marg_vec_ = tf.get_variable("marg_vec", dtype=tf.int32)
-  alpha_marg_ = tf.get_variable("alpha_marg")
+  R_ = loop_var.R
+  marg_vec_ = loop_var.marg_vec
+  alpha_marg_ = loop_var.alpha_marg
 
   k = loc_index + 1
 
-  sz = tf.shape(R_.read_value())[0]
+  sz = tf.shape(R_)[0]
   iter_tensor = tf.range(sz*sz)
   # iter_tensor = tf.reshape(iter_tensor, [sz, sz])
 
-  R_tens = R_.read_value()
   # R_new = tf.Print(R_tens, [tf.constant("----------Line 252---"),
   #  tf.shape(R_tens), R_tens[0][0], sz])
-  R_new = tf.map_fn(lambda i: rem_helper(i, R_tens, sz, k), 
+  R_new = tf.map_fn(lambda i: rem_helper(i, R_, sz, k), 
     iter_tensor, dtype=tf.float32)
   R_new = tf.reshape(R_new, [sz, sz])
   # # drop k th row
@@ -274,43 +283,33 @@ def rem_from_marg_sup(kernel_fn, loc_index):
   # # drop kth col
   R_new = tf.concat([R_new[:, :k], R_new[:, k+1:]], 1)
 
-  upd_r = tf.assign(R_, R_new, validate_shape=False)
+  R_ = R_new
 
   # remove index from marg_vec_
-  marg_vec_tens = marg_vec_.read_value()
-  upd_marg = tf.assign(marg_vec_,
-    tf.concat([marg_vec_tens[:loc_index], marg_vec_tens[loc_index+1:]], 0),
-    validate_shape=False)
+  marg_vec_ = tf.concat([marg_vec_[:loc_index], marg_vec_[loc_index+1:]], 0)
   # remove alpha value from alpha_marg
-  alpha_marg_tens = alpha_marg_.read_value()
-  upd_alpha = tf.assign(alpha_marg_,
-    tf.concat([alpha_marg_tens[:loc_index], alpha_marg_tens[loc_index+1:]], 0),
-    validate_shape=False)
+  alpha_marg_= tf.concat(
+    [alpha_marg_[:loc_index], alpha_marg_[loc_index+1:]], 0)
   # Force the update operations
-  with tf .control_dependencies([upd_r, upd_marg, upd_alpha]):
-    return tf.constant(1.)
+  return loop_var._replace(R=R_, marg_vec=marg_vec_, alpha_marg=alpha_marg_)
 
-def handle_marg(params, min_indx, beta_):
+# Returns a loop_var of the updated loop_var
+def handle_marg(params, min_indx, beta_, loop_var):
   # with tf.variable_scope(scope, reuse=True):
-  marg_vec_ = tf.get_variable("marg_vec", dtype=tf.int32).read_value()
+  marg_vec_ = loop_var.marg_vec
   # If beta[min_indx+1] < 0, then alpha becomes 0 and joins remaining vec,
   # else alpha becomes C and joins error vectors
-  op1 = tf.cond(
+  loop_var = tf.cond(
         beta_[min_indx+1] < 0, 
         lambda: add_to_rem(params["eps"], 
-          tf.constant(0.), marg_vec_[min_indx]),
-        lambda: add_to_err(tf.constant(0.), marg_vec_[min_indx])
+          tf.constant(0.), marg_vec_[min_indx], loop_var),
+        lambda: add_to_err(tf.constant(0.), marg_vec_[min_indx], loop_var)
         )
   # Remove vector from R_ and marg_vec_
-  with tf.control_dependencies([op1]):
-    op2 = rem_from_marg_sup(params["kernel"], min_indx)
+  # with tf.control_dependencies([op1]):
+  return rem_from_marg_sup(params["kernel"], min_indx, loop_var)
 
-    with tf.control_dependencies([op2]):
-      return tf.constant(1.)
-
-
-def update_g(g_var, gamma_tens, min_alpha):
-  g_tens = g_var.read_value()
+def update_g(g_tens, gamma_tens, min_alpha):
   iter_tensor = tf.range(tf.shape(g_tens)[0])
   return tf.cond(
     tf.equal(tf.shape(g_tens)[0], 0),
@@ -328,230 +327,267 @@ def check_min(tens, val):
     lambda: tf.shape(tens)[0] + 1)
 
 # returns alpha_c and g_c
-def mini_iter(params, i, j, x_all_, y_all_, n):
+def mini_iter(params, iter_ct, loop_var):
   with tf.control_dependencies(None):
-    marg_vec_ = tf.get_variable("marg_vec", dtype=tf.int32)
-    err_vec_ = tf.get_variable("err_vec", dtype=tf.int32)
-    rem_vec_ = tf.get_variable("rem_vec", dtype=tf.int32)
-    alpha_marg_ = tf.get_variable("alpha_marg")
-    g_err_ = tf.get_variable("g_err")
-    g_rem_ = tf.get_variable("g_rem")
-    g_c_ = tf.get_variable("g_c")
-    alpha_c_ = tf.get_variable("alpha_c")
-    b_ = tf.get_variable("b")
-    R_ = tf.get_variable("R")
+    marg_vec_ = loop_var.marg_vec
+    err_vec_ = loop_var.err_vec
+    rem_vec_ = loop_var.rem_vec
+    alpha_marg_ = loop_var.alpha_marg
+    g_err_ = loop_var.g_err
+    g_rem_ = loop_var.g_rem
+    g_c_ = loop_var.g_c
+    alpha_c_ = loop_var.alpha_c
+    b_ = loop_var.b
+    R_ = loop_var.R
+
+    x_all_ = loop_var.x_all
+    y_all_ = loop_var.y_all 
+    n = loop_var.n 
+
 
     printer = tf.Print(tf.constant(0), [tf.constant("AAAAAAAAAAAA")])
     # Handle case of matrix containing inf
-    inf_op = tf.cond(
-      tf.equal(tf.shape(marg_vec_)[0], printer),
-      lambda: tf.assign(R_, tf.constant([[-INF]])),
-      lambda: tf.constant([[-1.]]))
+    R_ = tf.cond(
+      tf.equal(tf.shape(loop_var.marg_vec)[0], 0),
+      lambda: tf.constant([[-INF]]),
+      lambda: loop_var.R)
+    loop_var = loop_var._replace(R=R_)
     
-    print_op = tf.Print(tf.constant(1.), [tf.constant("----------Line 334 ------: "),
-      tf.constant("MARG: "), marg_vec_.read_value(),
-      tf.constant("ERR: "), err_vec_.read_value(), 
-      tf.constant("REM: "), rem_vec_.read_value(),
-      tf.constant("ALPHA: "), alpha_marg_.read_value(),
-      tf.constant("B: "), b_.read_value()])
+    print_op = tf.Print(tf.constant(1.), [tf.constant("----------Line 348 ------: "),
+      tf.constant("MARG: "), loop_var.marg_vec,
+      tf.constant("ERR: "), loop_var.err_vec,
+      tf.constant("REM: "), loop_var.rem_vec,
+      tf.constant("ALPHA: "), loop_var.alpha_marg,
+      tf.constant("B: "), loop_var.b,
+      tf.constant("R: "), loop_var.R,
+      iter_ct])
+
     # Get beta and gamma necessary for the iteration
-    with tf.control_dependencies([inf_op, print_op]):
-      beta_ = get_beta(params["kernel"], x_all_, y_all_, n-1)
-    # Gamma for err_vec
-    gamma_err_ = get_gamma(params["kernel"], err_vec_.read_value(), beta_,
-      x_all_, y_all_, n)
+    with tf.control_dependencies([print_op]):
+      beta_ = get_beta(params["kernel"], x_all_, y_all_,
+        n-1, marg_vec_, R_)
+      # Gamma for err_vec
+    gamma_err_ = get_gamma(params["kernel"], err_vec_, beta_,
+      x_all_, y_all_, n, marg_vec_)
     # Gamma for rem_vec
-    gamma_rem_ = get_gamma(params["kernel"], rem_vec_.read_value(), beta_,
-      x_all_, y_all_, n)
+    gamma_rem_ = get_gamma(params["kernel"], rem_vec_, beta_,
+      x_all_, y_all_, n, marg_vec_)
     # Gamma for candidate vector
     n_temp = n-1
     gamma_c_ = get_gamma(params["kernel"], tf.reshape(n_temp, [1]), beta_,
-      x_all_, y_all_, n)
+      x_all_, y_all_, n, marg_vec_)
 
-    # Book-keeping -
-    # For margin support vectors, if Beta_s > 0, alpha_c can go to C or 
-    # if Beta_s < 0, alpha_s can go to 0, causing a transition in state
-    iter_tensor_a = tf.range(tf.shape(marg_vec_.read_value())[0])
-    # read value to get the latest value of the variable
-    alpha_marg_tens = alpha_marg_.read_value()
-    # Add extra condition to prevent map_fn on empty iter_tensor
-    marg_trans_alpha = tf.cond(tf.equal(tf.shape(iter_tensor_a)[0], 0),
-      lambda: tf.constant([]),
-      lambda: tf.map_fn(
-        lambda i: tf.cond(beta_[i+1] < 0,
-          # Alpha goes to zero
-          lambda: -1 * alpha_marg_tens[i] / beta_[i+1],
-          lambda: tf.cond(beta_[i+1] > 0,
-            # Alpha goes to C
-            lambda: (params["C"] - alpha_marg_tens[i]) / beta_[i+1],
-            # Beta is zero
-            lambda: tf.constant(float("Inf"))
-            )
-          ),
-        iter_tensor_a, dtype=tf.float32)
-    )
-    # For error support vectors, if Gamma_i > 0, then g_i increases to 0
-    # and causes state change
-    iter_tensor_e = tf.range(tf.shape(err_vec_.read_value())[0])
-    g_err_tens = g_err_.read_value()
-    err_trans_alpha = tf.cond(tf.equal(tf.shape(iter_tensor_e)[0], 0),
-      lambda: tf.constant([]),
-      lambda: tf.map_fn(
-        lambda i: tf.cond(gamma_err_[i] > 0,
-          lambda: -1 * g_err_tens[i] / gamma_err_[i],
-          lambda: tf.constant(float("Inf"))
-          ),
-        iter_tensor_e, dtype=tf.float32)
-      )
+    with tf.control_dependencies([beta_]): 
+      return (iter_ct+1, loop_var)
 
-    # For the remaining vectors, if Gamma_i < 0, then g_i decreases to 0
-    iter_tensor_r = tf.range(tf.shape(rem_vec_)[0])
-    g_rem_tens = g_rem_.read_value()
-    rem_trans_alpha = tf.cond(tf.equal(tf.shape(iter_tensor_r)[0], 0),
-      lambda: tf.constant([]),
-      lambda: tf.map_fn(
-        lambda i: tf.cond(gamma_rem_[i] < 0,
-          lambda: -1 * g_rem_tens[i] / gamma_rem_[i],
-          lambda: tf.constant(float("Inf"))
-          ),
-        iter_tensor_r, dtype=tf.float32)
-      )
-    # For candidate vector, if gamma_i > 0, then g_i increases to 0
-    # or alpha_c increases to C_svm
-    candidate_trans_alpha = tf.minimum(
-      tf.cond(gamma_c_[0] > 0,
-        lambda: -1*g_c_.read_value()/gamma_c_[0],
-        lambda: tf.constant(float("Inf"))),
-      params["C"] - alpha_c_.read_value())
+    # # Book-keeping -
+    # # For margin support vectors, if Beta_s > 0, alpha_c can go to C or 
+    # # if Beta_s < 0, alpha_s can go to 0, causing a transition in state
+    # iter_tensor_a = tf.range(tf.shape(marg_vec_)[0])
+    # # Add extra condition to prevent map_fn on empty iter_tensor
+    # marg_trans_alpha = tf.cond(tf.equal(tf.shape(iter_tensor_a)[0], 0),
+    #   lambda: tf.constant([]),
+    #   lambda: tf.map_fn(
+    #     lambda i: tf.cond(beta_[i+1] < 0,
+    #       # Alpha goes to zero
+    #       lambda: -1 * alpha_marg_[i] / beta_[i+1],
+    #       lambda: tf.cond(beta_[i+1] > 0,
+    #         # Alpha goes to C
+    #         lambda: (params["C"] - alpha_marg_[i]) / beta_[i+1],
+    #         # Beta is zero
+    #         lambda: tf.constant(float("Inf"))
+    #         )
+    #       ),
+    #     iter_tensor_a, dtype=tf.float32)
+    # )
+    # # For error support vectors, if Gamma_i > 0, then g_i increases to 0
+    # # and causes state change
+    # iter_tensor_e = tf.range(tf.shape(err_vec_)[0])
+    # err_trans_alpha = tf.cond(tf.equal(tf.shape(iter_tensor_e)[0], 0),
+    #   lambda: tf.constant([]),
+    #   lambda: tf.map_fn(
+    #     lambda i: tf.cond(gamma_err_[i] > 0,
+    #       lambda: -1 * g_err_[i] / gamma_err_[i],
+    #       lambda: tf.constant(float("Inf"))
+    #       ),
+    #     iter_tensor_e, dtype=tf.float32)
+    #   )
 
-    # Compare the min and do the necessary transitions
-    all_trans_alpha = tf.concat(
-      [marg_trans_alpha, err_trans_alpha, rem_trans_alpha, 
-      tf.reshape(candidate_trans_alpha, [1,])], 0)
-    min_alpha = tf.reduce_min(all_trans_alpha)
+    # # For the remaining vectors, if Gamma_i < 0, then g_i decreases to 0
+    # iter_tensor_r = tf.range(tf.shape(rem_vec_)[0])
+    # rem_trans_alpha = tf.cond(tf.equal(tf.shape(iter_tensor_r)[0], 0),
+    #   lambda: tf.constant([]),
+    #   lambda: tf.map_fn(
+    #     lambda i: tf.cond(gamma_rem_[i] < 0,
+    #       lambda: -1 * g_rem_[i] / gamma_rem_[i],
+    #       lambda: tf.constant(float("Inf"))
+    #       ),
+    #     iter_tensor_r, dtype=tf.float32)
+    #   )
+    # # For candidate vector, if gamma_i > 0, then g_i increases to 0
+    # # or alpha_c increases to C_svm
+    # candidate_trans_alpha = tf.minimum(
+    #   tf.cond(gamma_c_[0] > 0,
+    #     lambda: -1*g_c_/gamma_c_[0],
+    #     lambda: tf.constant(float("Inf"))),
+    #   params["C"] - alpha_c_)
 
-    # CALCULATING NEW VALUES
-    # Calculate new b
-    b_new = b_.read_value() + beta_[0]*min_alpha
-    upd_b = tf.assign(b_, b_new)
-    # Calculate new values of alpha for marg vec
-    alpha_marg_tens = alpha_marg_.read_value()
-    iter_tensor = tf.range(tf.shape(alpha_marg_tens)[0])
-    # Condition to not run the map fn on zero sz tensor
-    alpha_marg_new = tf.cond(tf.equal(tf.shape(iter_tensor)[0], 0),
-      lambda: tf.constant([]),
-      lambda: tf.map_fn(
-        lambda i: alpha_marg_tens[i] + beta_[i+1]*min_alpha,
-        iter_tensor, dtype=tf.float32)
-      )
-    upd_alpha = tf.assign(alpha_marg_, alpha_marg_new)
-    # Calculate new value of alpha_c
-    upd_alpha_c = tf.assign(alpha_c_, alpha_c_.read_value() + min_alpha)
+    # # Compare the min and do the necessary transitions
+    # all_trans_alpha = tf.concat(
+    #   [marg_trans_alpha, err_trans_alpha, rem_trans_alpha, 
+    #   tf.reshape(candidate_trans_alpha, [1,])], 0)
+    # min_alpha = tf.reduce_min(all_trans_alpha)
 
-    # Calculate new values of g_all
-    upd_g_err = tf.assign(g_err_, update_g(g_err_, gamma_err_, min_alpha))
-    upd_g_rem = tf.assign(g_rem_, update_g(g_rem_, gamma_rem_, min_alpha))
-    upd_g_c = tf.assign(g_c_, g_c_.read_value() + gamma_c_[0]*min_alpha)
+    # # CALCULATING NEW VALUES
+    # # Calculate new b
+    # b_ = b_ + beta_[0]*min_alpha
+    # loop_var = loop_var._replace(b=b_)
+    # # Calculate new values of alpha for marg vec
+    # iter_tensor = tf.range(tf.shape(alpha_marg_)[0])
+    # # Condition to not run the map fn on zero sz tensor
+    # alpha_marg_ = tf.cond(tf.equal(tf.shape(iter_tensor)[0], 0),
+    #   lambda: tf.constant([]),
+    #   lambda: tf.map_fn(
+    #     lambda i: alpha_marg_[i] + beta_[i+1]*min_alpha,
+    #     iter_tensor, dtype=tf.float32)
+    #   )
+    # loop_var = loop_var._replace(alpha_marg=alpha_marg_)
+    # # Calculate new value of alpha_c
+    # alpha_c_ = alpha_c_ + min_alpha
+    # loop_var = loop_var._replace(alpha_c=alpha_c_)
 
-    print_op2 = tf.Print(tf.constant(1.),
-      [tf.constant("BETA: "), beta_,
-      tf.constant("GAMMA_c: "), gamma_c_,
-      tf.constant("ALL TRANS: "), all_trans_alpha])
-    with tf.control_dependencies([upd_b, upd_alpha, upd_alpha_c, upd_g_err,
-      upd_g_rem, upd_g_c, print_op2]):
-      # MOVING VECTORS
-      # Check if min is in marg sup vectors
-      # Run get index only if tnsor sz is non-zero
-      min_indx = tf.cond(tf.equal(tf.shape(marg_trans_alpha)[0], 0),
-        lambda: tf.constant(1),
-        lambda: check_min(marg_trans_alpha, min_alpha),
-        )
-      mov_marg = tf.cond(
-        min_indx < tf.shape(marg_vec_.read_value())[0],
-        lambda: handle_marg(params, min_indx, beta_),
-        lambda: tf.constant(-1.))
+    # # Calculate new values of g_all
+    # g_err_ = update_g(g_err_, gamma_err_, min_alpha)
+    # g_rem_ = update_g(g_rem_, gamma_rem_, min_alpha)
+    # g_c_ = g_c_ + gamma_c_[0]*min_alpha
+    # loop_var = loop_var._replace(g_rem=g_rem_, g_err=g_err_, g_c=g_c_)
 
-      # Check if min is in err sup vectors
-      def handle_err(loc_index):
-        op1 = add_to_marg_supp(params["kernel"], err_vec_.read_value()[loc_index],
-          gamma_err_[loc_index], params["C"], x_all_, y_all_)
-        op2 = rem_from(err_vec_, g_err_, loc_index)
-        return op1 + op2
+    # print_op2 = tf.Print(tf.constant(1.),
+    #   [tf.constant("BETA: "), beta_,
+    #   tf.constant("GAMMA_c: "), gamma_c_,
+    #   tf.constant("ALL TRANS: "), all_trans_alpha])
+    # with tf.control_dependencies([print_op2]):
+    #   # MOVING VECTORS
+    #   # Check if min is in marg sup vectors
+    #   # Run get index only if tnsor sz is non-zero
+    #   min_indx = tf.cond(tf.equal(tf.shape(marg_trans_alpha)[0], 0),
+    #     lambda: tf.constant(1),
+    #     lambda: check_min(marg_trans_alpha, min_alpha),
+    #     )
+    #   loop_var = tf.cond(
+    #     min_indx < tf.shape(marg_vec_)[0],
+    #     lambda: handle_marg(params, min_indx, beta_, loop_var),
+    #     lambda: loop_var,
+    #     name="476")
 
-      min_indx = tf.cond(tf.equal(tf.shape(err_trans_alpha)[0], 0),
-        lambda: tf.constant(1),
-        lambda: check_min(err_trans_alpha, min_alpha)
-        )
+    #   # # Check if min is in err sup vectors
+    #   # def handle_err(loc_index, loop_var):
+    #   #   loop_var = add_to_marg_supp(params["kernel"], err_vec_[loc_index],
+    #   #     gamma_err_[loc_index], params["C"], x_all_, y_all_, loop_var)
+    #   #   loop_var = rem_from_err(loc_index, loop_var)
+    #   #   return loop_var
 
-      mov_err = tf.cond(
-        min_indx < tf.shape(err_vec_)[0],
-        lambda: handle_err(min_indx),
-        lambda: tf.constant(-1.))
+    #   # min_indx = tf.cond(tf.equal(tf.shape(err_trans_alpha)[0], 0),
+    #   #   lambda: tf.constant(1),
+    #   #   lambda: check_min(err_trans_alpha, min_alpha)
+    #   #   )
+
+    #   # loop_var = tf.cond(
+    #   #   min_indx < tf.shape(err_trans_alpha)[0],
+    #   #   lambda: handle_err(min_indx, loop_var),
+    #   #   lambda: loop_var,)
       
-      # Check if min is in remaining vectors
-      def handle_rem(loc_index):
-        op1 = add_to_marg_supp(params["kernel"], rem_vec_.read_value()[loc_index],
-          gamma_rem_[loc_index], 0.,x_all_, y_all_)
-        op2 = rem_from(rem_vec_, g_rem_, loc_index)
-        return op1 + op2
+    #   # # Check if min is in remaining vectors
+    #   # def handle_rem(loc_index, loop_var):
+    #   #   loop_var = add_to_marg_supp(params["kernel"], rem_vec_[loc_index],
+    #   #     gamma_rem_[loc_index], 0., x_all_, y_all_, loop_var)
+    #   #   loop_var = rem_from_rem(loc_index, loop_var)
+    #   #   return loop_var
 
-      min_indx = tf.cond(tf.equal(tf.shape(rem_trans_alpha)[0], 0),
-        lambda: tf.constant(1),
-        lambda: check_min(rem_trans_alpha, min_alpha)
-        )
-      mov_rem = tf.cond(
-        min_indx < tf.shape(rem_vec_)[0],
-        lambda: handle_rem(min_indx),
-        lambda: tf.constant(-1.))
-      # Need to add the candidate vector here as I need g and gamma values
-      mov_c = tf.cond(
-        termn_condn(params["C"], upd_alpha_c, upd_g_c),
-        lambda: tf.cond(
-          tf.equal(upd_g_c, 0),
-          lambda: add_to_marg_supp(params["kernel"],
-            n-1, gamma_c_[0], upd_alpha_c, x_all_, y_all_),
-          lambda: add_to_err(upd_g_c, n-1)),
-        lambda: tf.constant(-1.))
+    #   # min_indx = tf.cond(tf.equal(tf.shape(rem_trans_alpha)[0], 0),
+    #   #   lambda: tf.constant(1),
+    #   #   lambda: check_min(rem_trans_alpha, min_alpha)
+    #   #   )
+    #   # loop_var = tf.cond(
+    #   #   min_indx < tf.shape(rem_trans_alpha)[0],
+    #   #   lambda: handle_rem(min_indx, loop_var),
+    #   #   lambda: loop_var)
+    #   # Need to add the candidate vector here as I need g and gamma values
+    #   # loop_var = tf.cond(
+    #   #   termn_condn(params["C"], loop_var),
+    #   #   lambda: tf.cond(
+    #   #     tf.equal(loop_var.g_c, 0.),
+    #   #     lambda: add_to_marg_supp(params["kernel"],
+    #   #       n-1, gamma_c_[0], loop_var.alpha_c, x_all_, y_all_, loop_var),
+    #   #     lambda: add_to_err(loop_var.g_c, n-1, loop_var)),
+    #   #   lambda: loop_var)
 
-      with tf.control_dependencies([mov_marg, mov_err, mov_rem, mov_c]):
-        upd_alpha_c1 = tf.Print(upd_alpha_c,
-          [tf.constant("----------------Line 493---- "), n,
-          min_alpha, mov_marg, mov_err, mov_rem, mov_c, upd_alpha_c,
-          upd_g_c, marg_vec_.read_value(), err_vec_.read_value(), rem_vec_.read_value()])
-        return [upd_alpha_c1, upd_g_c]
+    #   printer = tf.Print(tf.constant(1.),
+    #       [tf.constant("----------------Line 512----: "), n, loop_var.marg_vec,
+    #       loop_var.err_vec, loop_var.rem_vec, loop_var.alpha_marg, loop_var.g_err,
+    #       loop_var.R, loop_var.b])
+    #   with tf.control_dependencies([printer]):
+    #     return loop_var
 
 def fit_point(params):
-  mini_params = {}
+  marg_vec_ = tf.get_variable("marg_vec", dtype=tf.int32)
+  err_vec_ = tf.get_variable("err_vec", dtype=tf.int32)
+  rem_vec_ = tf.get_variable("rem_vec", dtype=tf.int32)
+  alpha_marg_ = tf.get_variable("alpha_marg")
+  g_err_ = tf.get_variable("g_err")
+  g_rem_ = tf.get_variable("g_rem")
+  g_c_ = tf.get_variable("g_c")
+  alpha_c_ = tf.get_variable("alpha_c")
+  b_ = tf.get_variable("b")
+  R_ = tf.get_variable("R")
 
-  alpha_c = tf.get_variable("alpha_c").read_value()
-  g_c = tf.get_variable("g_c").read_value()
-  x_all_ = mini_params["x_all_"] = tf.get_variable("x_all").read_value()
-  y_all_ = tf.get_variable("y_all").read_value()
-  n = tf.get_variable("n", dtype=tf.int32).read_value()
+  # While loop supports named tuples and not dicts
+  LoopVars = namedtuple("LoopVars",
+    "x_all, y_all, n, marg_vec, err_vec, rem_vec, alpha_marg, g_err, g_rem, g_c, alpha_c, b, R")
+  init_val = (tf.constant(0), LoopVars(
+    x_all=tf.get_variable("x_all").read_value(),
+    y_all=tf.get_variable("y_all").read_value(),
+    n=tf.get_variable("n", dtype=tf.int32).read_value(),
+    marg_vec=marg_vec_.read_value(),
+    err_vec=err_vec_.read_value(),
+    rem_vec=rem_vec_.read_value(),
+    alpha_marg=alpha_marg_.read_value(),
+    g_err=g_err_.read_value(),
+    g_rem=g_rem_.read_value(),
+    g_c=g_c_.read_value(),
+    alpha_c=alpha_c_.read_value(),
+    b=b_.read_value(),
+    R=R_.read_value(),
+    ))
 
-  # marg_vec_ = tf.get_variable("marg_vec", dtype=tf.int32)
-  # err_vec_ = tf.get_variable("err_vec", dtype=tf.int32)
-  # rem_vec_ = tf.get_variable("rem_vec", dtype=tf.int32)
-  # alpha_marg_ = tf.get_variable("alpha_marg")
-  # g_err_ = tf.get_variable("g_err")
-  # g_rem_ = tf.get_variable("g_rem")
-  # g_c_ = tf.get_variable("g_c")
-  # alpha_c_ = tf.get_variable("alpha_c")
-  # b_ = tf.get_variable("b")
-  # R_ = tf.get_variable("R")
-
-  alpha_c = tf.Print(alpha_c, [tf.constant("----------------Line 509--- "),
-    n, x_all_, y_all_, tf.constant("------G_c: "), g_c, alpha_c])
-  fin_alpha, fin_g = tf.while_loop(
-    cond=lambda i, j: tf.logical_not(termn_condn(params["C"], i, j)),
-    body=lambda i, j: mini_iter(params, i, j, x_all_, y_all_, n), 
-    loop_vars=[alpha_c, g_c],
-    # parallel_iterations=1,
-    # back_prop=False,
+  # init_val = tf.Print(init_val, [tf.constant("----------------Line 509--- "),
+  #   fixed_vars["n"], fixed_vars["x_all"], fixed_vars["y_all"],
+  #   tf.constant("------G_c: "), init_val])
+  fin_i, fin_vars = tf.while_loop(
+    cond=lambda i, p: tf.logical_and(tf.logical_not(termn_condn(params["C"], p)),
+      tf.less(i, 1)),
+    body=lambda i, p: mini_iter(params, i, p), 
+    loop_vars=init_val,
+    parallel_iterations=1,
+    back_prop=False,
     name="FIT_WHILE"
     )
 
-  return (fin_alpha)
+  upd_marg_vec = tf.assign(marg_vec_, fin_vars.marg_vec, validate_shape=False)
+  upd_err_vec = tf.assign(err_vec_, fin_vars.err_vec, validate_shape=False)
+  upd_rem_vec = tf.assign(rem_vec_, fin_vars.rem_vec, validate_shape=False)
+  upd_alpha_marg = tf.assign(alpha_marg_, fin_vars.alpha_marg,
+    validate_shape=False)
+  upd_g_err = tf.assign(g_err_, fin_vars.g_err, validate_shape=False)
+  upd_g_rem = tf.assign(g_rem_, fin_vars.g_rem, validate_shape=False)
+  upd_alpha_c = tf.assign(alpha_c_, fin_vars.alpha_c, validate_shape=False)
+  upd_g_c = tf.assign(g_c_, fin_vars.g_c, validate_shape=False)
+  upd_b = tf.assign(b_, fin_vars.b, validate_shape=False)
+  upd_R = tf.assign(R_, fin_vars.R, validate_shape=False)
+
+  with tf.control_dependencies([upd_marg_vec, upd_err_vec, upd_rem_vec,
+    upd_alpha_marg, upd_g_err, upd_g_rem, upd_alpha_c, upd_g_c, upd_b, upd_R]):
+    return fin_i
 
 def create_svm_variables(x_shape):
   with tf.variable_scope("svm_model") as scope:
@@ -687,7 +723,7 @@ def svm_model_fn():
     with tf.Session() as sess:
       sess.run(tf.global_variables_initializer())
       tr = svm_train(x_, y_, model_params)
-      for i in range(3):
+      for i in range(1):
         print("\n \n")
         print(sess.run(tr, feed_dict={x_ : x_train[i], y_ : y_train[i]}))
         # y_all_ = tf.get_variable("y_all")

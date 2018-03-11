@@ -1,23 +1,21 @@
 # import numpy as np
 import tensorflow as tf
+from collections import namedtuple
 
-def get_index(tens_, val):
-  i = tf.constant(0)
-  sz = tf.shape(tens_)[0]
-  c = lambda i: tf.logical_and(tf.less(i ,sz), 
-    tf.not_equal(tens_[i], val))
-  b = lambda i: tf.add(i, 1)
-  r = tf.while_loop(c, b, [i])
-  # assert r is  tensor of rank 0
-  return r
+def f2(obj):
+    return obj
 
-tens = tf.constant([])
-val = tf.constant(4)
-r = (tf.map_fn(lambda i: i, tens))
-# (tens, val)
+def f1(i, p):
+    return (i+1, p)
 
 with tf.Session() as sess:
-    print(sess.run(r))
+    Pair = namedtuple('Pair', 'j, k')
+    ijk_0 = (tf.constant(0), Pair(tf.constant(1), tf.constant(2)))
+    c = lambda i, p: i < 10
+    b = lambda i, p: (i + 1, p)
+    ijk_final = tf.while_loop(c, lambda i, p: f1(i, p), ijk_0)
+    print(sess.run(ijk_final))
+
 # # NOTES:
 # # The cache seems to be storing the name of the value instead of the tensor value
 # # Think of a way to store the tensor value rather than
