@@ -13,13 +13,14 @@ def f2():
     return tf.while_loop(lambda i,j: tf.less(i, 10), lambda i,j: f1(i,j), [i,j])
 
 with tf.Session() as sess:
-    i = tf.constant(0.)
-    with tf.variable_scope("sc") as sc:
-        j = tf.get_variable("j", initializer=tf.constant([0 ,1]))
-    sess.run(tf.global_variables_initializer())
-    with tf.variable_scope(sc, reuse=True):
-        r = f2()
-        print(sess.run(r))
+    i = tf.constant([1,4.])
+    # j = tf.constant(3.)
+    # with tf.variable_scope("sc") as sc:
+    #     j = tf.get_variable("j", initializer=tf.constant([0 ,1]))
+    # sess.run(tf.global_variables_initializer())
+    # with tf.variable_scope(sc, reuse=True):
+    r = tf.reshape(tf.reshape(i, [-1, 1]), [-1,])
+    print(sess.run(r))
 # # NOTES:
 # # The cache seems to be storing the name of the value instead of the tensor value
 # # Think of a way to store the tensor value rather than
