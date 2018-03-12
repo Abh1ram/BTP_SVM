@@ -172,7 +172,8 @@ def get_beta(kernel_fn, x_all_, y_all_, glob_index, marg_vec_, R_):
     temp_q = tf.cond(tf.equal(tf.shape(marg_vec_)[0], 0),
       lambda: tf.constant([]),
       lambda: tf.map_fn(
-              lambda i: y_c * y_all_[i] * kernel_fn(x_c, x_all_[i]), 
+              lambda i: y_c, 
+              # * y_all_[i] * kernel_fn(x_c, x_all_[i]), 
               marg_vec_, dtype=tf.float32, name="BETA_MAP"),
       name="BETA_COND")
     # Add y_c as the first element
@@ -328,7 +329,7 @@ def check_min(tens, val):
 
 # returns alpha_c and g_c
 def mini_iter(params, iter_ct, loop_var):
-  with tf.control_dependencies(None):
+  # with tf.control_dependencies(None):
     marg_vec_ = loop_var.marg_vec
     err_vec_ = loop_var.err_vec
     rem_vec_ = loop_var.rem_vec
@@ -360,12 +361,12 @@ def mini_iter(params, iter_ct, loop_var):
       tf.constant("ALPHA: "), loop_var.alpha_marg,
       tf.constant("B: "), loop_var.b,
       tf.constant("R: "), loop_var.R,
-      iter_ct])
+      iter_ct], name="BITCH_PRINT")
 
     # Get beta and gamma necessary for the iteration
-    with tf.control_dependencies([print_op]):
-      beta_ = get_beta(params["kernel"], x_all_, y_all_,
-        n-1, marg_vec_, R_)
+    # with tf.control_dependencies([print_op]):
+    beta_ = get_beta(params["kernel"], x_all_, y_all_,
+      n-1, marg_vec_, R_)
       # Gamma for err_vec
     gamma_err_ = get_gamma(params["kernel"], err_vec_, beta_,
       x_all_, y_all_, n, marg_vec_)
@@ -545,9 +546,9 @@ def fit_point(params):
   LoopVars = namedtuple("LoopVars",
     "x_all, y_all, n, marg_vec, err_vec, rem_vec, alpha_marg, g_err, g_rem, g_c, alpha_c, b, R")
   init_val = (tf.constant(0), LoopVars(
-    x_all=tf.get_variable("x_all").read_value(),
-    y_all=tf.get_variable("y_all").read_value(),
-    n=tf.get_variable("n", dtype=tf.int32).read_value(),
+    x_all=tf.identity(tf.get_variable("x_all").read_value()) + 0.,
+    y_all=tf.identity(tf.get_variable("y_all").read_value()) + 0.,
+    n=tf.identity(tf.get_variable("n", dtype=tf.int32).read_value()) + 0,
     marg_vec=marg_vec_.read_value(),
     err_vec=err_vec_.read_value(),
     rem_vec=rem_vec_.read_value(),
