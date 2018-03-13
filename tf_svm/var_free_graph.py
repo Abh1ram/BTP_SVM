@@ -46,6 +46,34 @@ def calc_f(all_vars, params):
 def calc_g(all_vars, params):
   return calc_f(all_vars, params) * all_vars.y_c - 1.
 
+def free_add_to_marg(kernel_fn, alpha_c, x_c, y_c, all_vars):
+  # print_op = tf.Print(tf.constant(1.), [], "Inside free add")
+  # with tf.control_dependencies([print_op]):
+  Q_s_ = all_vars.Q_s
+  marg_vec_x_ = all_vars.marg_vec_x
+  marg_vec_y_ = all_vars.marg_vec_y
+  alpha_marg_ = all_vars.alpha_marg
+  # Update Q_s by adding new row and column in the end
+  q_cc = y_c*y_c*kernel_fn(x_c, x_c)
+  Q_marg_c = get_Q_vec(kernel_fn, x_c, y_c, marg_vec_x_, marg_vec_y_)
+  Q_marg_c = tf.concat([tf.reshape(y_c, [1,]), Q_marg_c], 0)
+  # Concat new row
+  Q_s_ = tf.concat([Q_s_, tf.reshape(Q_marg_c, [1, -1])], 0)
+  # Concat new column after adding q_cc
+  Q_marg_c = tf.concat([Q_marg_c, tf.reshape(q_cc, [1,])], 0)
+  Q_s_ = tf.concat([Q_s_, tf.reshape(Q_marg_c, [-1, 1])], 1)
+
+  # print_op = tf.Print(tf.constant(1), [x_c, y_c, all_vars.Q_s, Q_s_],
+  #  "BEFORE and AFTER: ")
+  # with tf.control_dependencies([print_op]):
+  # add x_c, y_c and alpha to marg_vec_x marg_vc_y and alpha_marg
+  marg_vec_x_ = tf.concat([marg_vec_x_, tf.reshape(x_c, [1, -1])], 0)
+  marg_vec_y_ = tf.concat([marg_vec_y_, tf.reshape(y_c, [1,])], 0)
+  alpha_marg_ = tf.concat([alpha_marg_, tf.reshape(alpha_c, [1,])], 0)
+
+  return all_vars._replace(Q_s=Q_s_, marg_vec_x=marg_vec_x_,
+    marg_vec_y=marg_vec_y_, alpha_marg=alpha_marg_)
+
 def add_to_marg(kernel_fn, alpha_c, x_c, y_c, beta_c, gamma_c, all_vars):
   R_ = all_vars.R
   marg_vec_x_ = all_vars.marg_vec_x
@@ -67,6 +95,7 @@ def add_to_marg(kernel_fn, alpha_c, x_c, y_c, beta_c, gamma_c, all_vars):
   # One after each dim
   pad_R = tf.constant([[0, 1], [0, 1]])
   R_ = tf.pad(R_, pad_R, "CONSTANT")
+  R_ = R_ + beta_mat
   # add x_c, y_c and alpha to marg_vec_x marg_vc_y and alpha_marg
   marg_vec_x_ = tf.concat([marg_vec_x_, tf.reshape(x_c, [1, -1])], 0)
   marg_vec_y_ = tf.concat([marg_vec_y_, tf.reshape(y_c, [1,])], 0)
@@ -95,11 +124,11 @@ def add_to_rem(eps, g_c, x_c, y_c, all_vars):
 
 # Terminate if candidate g_c equals 0 or candidate alpha_c equals C
 def termn_condn(C_svm, all_vars):
-  print_op = tf.Print(tf.constant(0), [all_vars.alpha_c, all_vars.g_c],
-    "Checking while looop termn_condn")
-  with tf.control_dependencies([print_op]):
-    return tf.logical_or(tf.equal(all_vars.g_c, 0.),
-      tf.equal(all_vars.alpha_c, C_svm))
+  # print_op = tf.Print(tf.constant(0), [all_vars.alpha_c, all_vars.g_c],
+    # "Checking while loop termn_condn")
+  # with tf.control_dependencies([print_op]):
+  return tf.logical_or(tf.equal(all_vars.g_c, 0.),
+    tf.equal(all_vars.alpha_c, C_svm))
 
 # This can be cached - not for Tensorflow though
 def get_Q_vec(kernel_fn, x_c, y_c, vec_x, vec_y):
@@ -205,6 +234,28 @@ def rem_from_marg(kernel_fn, min_marg_indx, all_vars):
   return all_vars._replace(R=R_, marg_vec_x=marg_vec_x_,
     marg_vec_y=marg_vec_y_, alpha_marg=alpha_marg_)
 
+def rem_from_rem(indx, all_vars):
+  rem_vec_x_ = all_vars.rem_vec_x
+  rem_vec_y_ = all_vars.rem_vec_y
+  g_rem_ = all_vars.g_rem
+
+  rem_vec_x_ = tf.concat([rem_vec_x_[:indx], rem_vec_x_[indx+1:]], 0)
+  rem_vec_y_ = tf.concat([rem_vec_y_[:indx], rem_vec_y_[indx+1:]], 0)
+  g_rem_ = tf.concat([g_rem_[:indx], g_rem_[indx+1:]], 0)
+  return all_vars._replace(rem_vec_x=rem_vec_x_, rem_vec_y=rem_vec_y_,
+    g_rem=g_rem_)
+
+def rem_from_err(indx, all_vars):
+  err_vec_x_ = all_vars.err_vec_x
+  err_vec_y_ = all_vars.err_vec_y
+  g_err_ = all_vars.g_err
+
+  err_vec_x_ = tf.concat([err_vec_x_[:indx], err_vec_x_[indx+1:]], 0)
+  err_vec_y_ = tf.concat([err_vec_y_[:indx], err_vec_y_[indx+1:]], 0)
+  g_err_ = tf.concat([g_err_[:indx], g_err_[indx+1:]], 0)
+  return all_vars._replace(err_vec_x=err_vec_x_, err_vec_y=err_vec_y_,
+    g_err=g_err_)
+
 def handle_rem(params, min_rem_indx, gamma_rem, all_vars):
   # Add the vector to marg support
   alpha_ = tf.constant(0.)
@@ -213,19 +264,7 @@ def handle_rem(params, min_rem_indx, gamma_rem, all_vars):
   
   all_vars = add_to_marg(params["kernel"], alpha_, x_, y_, tf.constant(-1.),
     gamma_rem[min_rem_indx], all_vars)
-
-  rem_vec_x_ = all_vars.rem_vec_x
-  rem_vec_y_ = all_vars.rem_vec_y
-  g_rem_ = all_vars.g_rem
-
-  rem_vec_x_ = tf.concat([rem_vec_x_[:min_rem_indx],
-    rem_vec_x_[min_rem_indx+1:]], 0)
-  rem_vec_y_ = tf.concat([rem_vec_y_[:min_rem_indx],
-    rem_vec_y_[min_rem_indx+1:]], 0)
-  g_rem_ = tf.concat([g_rem_[:min_rem_indx],
-    g_rem_[min_rem_indx+1:]], 0)
-  return all_vars._replace(rem_vec_x=rem_vec_x_, rem_vec_y=rem_vec_y_,
-    g_rem=g_rem_)
+  return rem_from_rem(min_rem_indx, all_vars)
 
 def handle_err(params, min_err_indx, gamma_err, all_vars):
   # Add the vector to marg support
@@ -235,19 +274,7 @@ def handle_err(params, min_err_indx, gamma_err, all_vars):
   
   all_vars = add_to_marg(params["kernel"], alpha_, x_, y_, tf.constant(-1.),
     gamma_err[min_err_indx], all_vars)
-
-  err_vec_x_ = all_vars.err_vec_x
-  err_vec_y_ = all_vars.err_vec_y
-  g_err_ = all_vars.g_err
-
-  err_vec_x_ = tf.concat([err_vec_x_[:min_err_indx],
-    err_vec_x_[min_err_indx+1:]], 0)
-  err_vec_y_ = tf.concat([err_vec_y_[:min_err_indx],
-    err_vec_y_[min_err_indx+1:]], 0)
-  g_err_ = tf.concat([g_err_[:min_err_indx],
-    g_err_[min_err_indx+1:]], 0)
-  return all_vars._replace(err_vec_x=err_vec_x_, err_vec_y=err_vec_y_,
-    g_err=g_err_)
+  return rem_from_err(min_err_indx, all_vars)
 
 def handle_marg(params, min_marg_indx, beta, all_vars):
   # add the vector to error or remain based on beta value
@@ -260,30 +287,108 @@ def handle_marg(params, min_marg_indx, beta, all_vars):
 
   return rem_from_marg(params["kernel"], min_marg_indx, all_vars)
 
-def handle_empty_marg(all_vars):
+def handle_empty_rem(params, min_rem_indx, all_vars):
+  # Add the vector to marg support
+  alpha_ = params["C"]
+  x_ = all_vars.rem_vec_x[min_rem_indx]
+  y_ = all_vars.rem_vec_y[min_rem_indx]
+  
+  all_vars = free_add_to_marg(params["kernel"], alpha_, x_, y_, all_vars)
+  return rem_from_rem(min_rem_indx, all_vars)
+
+def handle_empty_err(params, min_err_indx, all_vars):
+  # Add the vector to marg support
+  alpha_ = params["C"] 
+  x_ = all_vars.err_vec_x[min_err_indx]
+  y_ = all_vars.err_vec_y[min_err_indx]
+  
+  all_vars = free_add_to_marg(params["kernel"], alpha_, x_, y_, all_vars)
+  return rem_from_err(min_err_indx, all_vars)
+
+def handle_empty_marg(params, all_vars):
+  # print_op = tf.Print(tf.constant(1), [], "Inside handling empty marg")
+  # Set Q_s as [[0]]
+  # with tf.control_dependencies([print_op]):
+  all_vars = all_vars._replace(Q_s=tf.constant([[0.]]))
   # Calculate min b for transition
-  # g_c_ = all_vars.g_c
-  # x_c_ = all_vars.x_c
-  # y_c_ = all_vars.y_c
+  g_c_ = all_vars.g_c
+  x_c_ = all_vars.x_c
+  y_c_ = all_vars.y_c
 
-  # trans_c = -g_c_/y_c_
-  # # calc trans b for err and rem
-  # elems = (all_vars.err_vec_y, all_vars.g_err)
-  # trans_err = tf.map_fn(
-  #   lambda x: tf.cond(
-  #     tf.greater()))
-  return all_vars._replace(R=-1*tf.constant([[INF]]))
+  trans_c = -1*g_c_
+  # calc trans b for err and rem
+  # For err_vec, err_vec_y should have same sign as y_c_
+  elems = (all_vars.err_vec_y, all_vars.g_err)
+  trans_err = tf.map_fn(
+    lambda x: tf.cond(
+      tf.greater(x[0] * y_c_, 0),
+      lambda: -1*x[1],
+      lambda: tf.constant(float("Inf"))),
+    elems, dtype=tf.float32)
+  # For rem_vec, rem_vec_y should have opposite sign as y_c_
+  elems = (all_vars.rem_vec_y, all_vars.g_rem)
+  trans_rem = tf.map_fn(
+    lambda x: tf.cond(
+      tf.less(x[0] * y_c_, 0),
+      lambda: x[1],
+      lambda: tf.constant(float("Inf"))),
+    elems, dtype=tf.float32)
 
-def mini_iter(params, i, all_vars):
-  printer = tf.Print(tf.constant(0), [], "Inside body")
-  # Handle case of matrix containing inf
+  # Find the min transition_val for b
+  all_trans = tf.concat(
+    [trans_err, trans_rem, 
+    tf.reshape(trans_c, [1,])], 0)
+  abs_min_del_b = tf.reduce_min(all_trans)
+  # change the sign of min_del_b to the sign of y_c_ as
+  # this is the dirn of update
+  min_del_b = y_c_ * abs_min_del_b
+
+  # update values
+  b_ = all_vars.b + min_del_b
+  g_c_ = g_c_ + (min_del_b * y_c_)
+  # update g_err
+  g_err_ = all_vars.g_err + (all_vars.err_vec_y * min_del_b)
+  # update g_rem
+  g_rem_ = all_vars.g_rem + (all_vars.rem_vec_y * min_del_b)
+
+  # print_op = tf.Print(tf.constant(1.), [all_vars.g_c, all_vars.Q_s, min_del_b],
+  #   "Line 351")
+  # with tf.control_dependencies([print_op]):
+  all_vars = all_vars._replace(b=b_, g_c=g_c_, g_err=g_err_, g_rem=g_rem_)
+
+  # Transition vectors if g is zero and dirn of update is same as candidate
+  # Check if min is in err sup vectors
+  min_err_indx = tf.cond(tf.equal(tf.shape(trans_err)[0], 0),
+    lambda: tf.constant(1),
+    lambda: check_min(trans_err, abs_min_del_b),
+    )
   all_vars = tf.cond(
-    tf.equal(tf.shape(all_vars.marg_vec_x)[0], 0),
-    lambda: handle_empty_marg(all_vars),
+    tf.less(min_err_indx, tf.shape(trans_err)[0]),
+    lambda: handle_empty_err(params, min_err_indx, all_vars),
     lambda: all_vars)
-  # all_vars = all_vars._replace(R=R_)
+  # Check if min is in rem vectors
+  min_rem_indx = tf.cond(tf.equal(tf.shape(trans_rem)[0], 0),
+    lambda: tf.constant(1),
+    lambda: check_min(trans_rem, abs_min_del_b),
+    )
+  all_vars = tf.cond(
+    tf.less(min_rem_indx, tf.shape(trans_rem)[0]),
+    lambda: handle_empty_rem(params, min_rem_indx, all_vars),
+    lambda: all_vars)
+  # Check if min is in trans_c
+  all_vars = tf.cond(
+    tf.equal(trans_c, abs_min_del_b),
+    lambda: free_add_to_marg(params["kernel"], all_vars.alpha_c,all_vars.x_c,
+      all_vars.y_c, all_vars),
+    lambda: all_vars)
+  # update R as inverse of Q
+  R_ = tf.matrix_inverse(all_vars.Q_s)
+  return all_vars._replace(R=R_)
 
+def mini_iter(params, all_vars):
+  # print_op = tf.Print(tf.constant(1.), [], "Inside mini iter")
   # Calculate beta
+  # with tf.control_dependencies([print_op]):
   beta = get_beta(params["kernel"], all_vars.x_c, all_vars.y_c, all_vars)
   # Calculate gamma
   gamma_err = get_gamma(params["kernel"], all_vars.err_vec_x, all_vars.err_vec_y,
@@ -328,7 +433,7 @@ def mini_iter(params, i, all_vars):
   all_vars = update_val(min_alpha, beta, gamma_err, gamma_rem, gamma_c,
     all_vars)
 
-  # Transition and move vectors
+  # TRANSITION AND MOVE VECTORS
   # Check if min is in marg sup vectors
   # Run get index only if tnsor sz is non-zero
   min_marg_indx = tf.cond(tf.equal(tf.shape(trans_marg)[0], 0),
@@ -362,7 +467,7 @@ def mini_iter(params, i, all_vars):
     lambda: all_vars)
 
   # Need to add the candidate vector here as I need g and gamma values
-  all_vars = tf.cond(
+  return tf.cond(
     termn_condn(params["C"], all_vars),
     lambda: tf.cond(
       tf.equal(all_vars.g_c, 0.),
@@ -371,9 +476,23 @@ def mini_iter(params, i, all_vars):
       lambda: add_to_err(all_vars.g_c, all_vars.x_c, all_vars.y_c, all_vars)),
     lambda: all_vars)
 
-  printer = tf.Print(tf.constant(1.), [tf.shape(all_vars.marg_vec_x)], "SHAPE: ")
-  with tf.control_dependencies([printer]):
-    return (i+1, all_vars)
+def loop_body(params, i, all_vars):
+  # printer = tf.Print(tf.constant(0), [], "Inside body")
+  # Handle case of matrix containing inf
+  # with tf.control_dependencies([printer]):
+  all_vars = tf.cond(
+    tf.equal(tf.shape(all_vars.marg_vec_x)[0], 0),
+    lambda: handle_empty_marg(params, all_vars),
+    lambda: all_vars)
+  # If x_c was already added to marg, there is nothing to do
+  all_vars = tf.cond(
+    tf.equal(all_vars.g_c, 0),
+    lambda: all_vars,
+    lambda: mini_iter(params, all_vars))
+
+  # printer = tf.Print(tf.constant(1.), [tf.shape(all_vars.marg_vec_x)], "SHAPE: ")
+  # with tf.control_dependencies([printer]):
+  return (i+1, all_vars)
 
 def fit_point(params, all_vars):
   iter_ct = tf.constant(0.)
@@ -393,10 +512,11 @@ def fit_point(params, all_vars):
     # R=all_vars.R.get_shape(), Q_s=all_vars.Q_s.get_shape())
   
   fin_i, fin_vars = tf.while_loop(
-    cond=lambda i, p: tf.logical_and(
-      tf.logical_not(termn_condn(params["C"], p)),
-      tf.less(i, 2)),
-    body=lambda i, p: mini_iter(params, i, p), 
+    cond=lambda i, p: tf.logical_not(termn_condn(params["C"], p)), 
+    # tf.logical_or(
+    #   tf.logical_not(termn_condn(params["C"], p)),
+    #   tf.less(i, 1)),
+    body=lambda i, p: loop_body(params, i, p), 
     loop_vars=(iter_ct, all_vars),
     parallel_iterations=1,
     back_prop=False,
@@ -511,6 +631,9 @@ def svm_model_fn():
   # make these command line args
   train_file = "data_1.csv"
   x_train, y_train = extract_data(train_file, "csv")
+  n = len(x_train)
+  # x_train = x_train[1:]
+  # y_train = y_train[1:]
   model_params["shape"] = x_train.shape[1]
 
   # Placeholders for inputs
@@ -527,13 +650,18 @@ def svm_model_fn():
     sess.run(tf.global_variables_initializer())
     all_vars_upd = svm_train(x_, y_, model_params, all_vars)
     tr = update_vars(scope, all_vars_upd)
-    for i in range(2):
-      print("\n \n")
-      print(sess.run([tr, all_vars_upd], feed_dict={x_ : x_train[i], y_ : y_train[i]}))
+    for i in range(12):
+      print(i)
+      input()
+      _, req = sess.run([tr, all_vars_upd],
+        feed_dict={x_ : x_train[i], y_ : y_train[i]})
+      print(req)
         # y_all_ = tf.get_variable("y_all")
         # print(sess.run(y_all_))
-      # writer = tf.summary.FileWriter(path_, sess.graph)
-      # writer.close()
+    writer = tf.summary.FileWriter(path_, sess.graph)
+    writer.close()
+    print("MARG: ", len(req.marg_vec_x), "ERR: ", len(req.err_vec_x),
+      "REM: ", len(req.rem_vec_y))
 
 if __name__ == "__main__":
   svm_model_fn()

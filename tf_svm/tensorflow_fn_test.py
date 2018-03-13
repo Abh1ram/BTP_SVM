@@ -32,11 +32,11 @@ with tf.Session() as sess:
     # iter_ct = tf.constant(0.)
     # r = tf.while_loop(lambda i,p: tf.less(i, 3), f1, [iter_ct, p],
     #     shape_invariants=[iter_ct.get_shape(), shp])
-    R = tf.constant([[1, 2, 3, 4],[5, 6, 7, 8], [9, 10, 11, 12],
-        [13, 14, 15, 16]])
-    # col2 = tf.reshape(R[:, 2], [3, 1])
-    paddings = tf.constant([[0,1], [0, 1]])
-    R1 = tf.pad(R, paddings, "CONSTANT")
+    # R = tf.constant([[1, 2, 3, 4],[5, 6, 7, 8], [9, 10, 11, 12],
+    #     [13, 14, 15, 16]])
+    # # col2 = tf.reshape(R[:, 2], [3, 1])
+    # paddings = tf.constant([[0,1], [0, 1]])
+    # R1 = tf.pad(R, paddings, "CONSTANT")
     # R1[2, :] = R[2, :]
     # R1[:, 2] = R[:, 2]
     # r = tf.reshape(j, [-1, -1])
@@ -44,9 +44,9 @@ with tf.Session() as sess:
     #     j = tf.get_variable("j", initializer=tf.constant([0 ,1]))
     # sess.run(tf.global_variables_initializer())
     # with tf.variable_scope(sc, reuse=True):
-    # i = tf.constant([1., 2, 3])
-    # j = tf.reshape(i, [])
-    print(sess.run(R1))
+    i = tf.constant([1., 2, 3])
+    j = tf.constant([2,3,4.])
+    print(sess.run(i*j))
     # print(sess.run(r2))
 # # NOTES:
 # # The cache seems to be storing the name of the value instead of the tensor value
