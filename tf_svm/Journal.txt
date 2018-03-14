@@ -1,0 +1,49 @@
+BTP:
+
+-----------------------
+
+TODO:
+1. Check elem by elem comparison with btp_python old
+2. Add check that candidate was alrady added in handle_empty_marg,
+cur_check not good enough for initial g_c=0
+3. Add iterator for getting data for tf instead of the old data loader
+
+
+14-03
+ERRORS:
+1. alpha was C instead of 0 while calling from handle_empty_rem
+2. Gamma_c in the calculation of R whlie addition of new data point needs to be recalulcated
+wrt to beta_c of the point to be added 
+
+
+
+
+
+
+
+
+
+
+-----------------------
+PROBS:
+1. frame error - None control dep
+2. WHILE loop not getting executed again - some recomp problem - read carefully - loop_var namedtuple
+3. Now error of while loop vars not being able to participate in any operations - cause - None control dep
+
+Reproduce and fix 2
+
+
+ERRORS:
+1. control dependency -- None is causing the error of whlie loop tensors cant be used in any
+operation
+2.
+------------------------------- PIVOT ---------------------------
+
+--------PYTORCH--------
+1. Broadcasting
+2. CUDA - automatic synchronization - new operator to create tensor in the same 
+dtype = torch.cuda.FloatTensor
+for cuda, use dataparallel instead of multiprocessing
+3. map function
+
+
