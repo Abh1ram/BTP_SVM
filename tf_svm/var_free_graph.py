@@ -15,23 +15,14 @@ from data_loader import extract_data
 
 path_ = os.path.join("log_graph")
 
-C_SVM = 5.
-RESERVE_THRESHOLD = 5.
-
 INF = 10**12 + 0.
 
 # Simple dot product - returns a rank 0 tensor/scalar
 def simple_kernel(x1, x2):
   return tf.tensordot(x1, x2, [0,0])
 
-model_params = {
-  "C" : C_SVM,
-  "eps" : RESERVE_THRESHOLD,
-  "kernel" : simple_kernel,
-  }
-
 # Calc f(x) = SUM (alpha_j * y_j * kernel(x_j, x)) for j in support vectors - marg, err
-def calc_f(all_vars, params):
+def calc_f(params, x_c, all_vars):
   alpha_err_ = tf.map_fn(lambda x: params["C"], all_vars.err_vec_x,
     dtype=tf.float32)
   # More parallelism
@@ -39,13 +30,14 @@ def calc_f(all_vars, params):
   supp_vec_y = tf.concat([all_vars.marg_vec_y, all_vars.err_vec_y], 0)
   alpha_supp_ = tf.concat([all_vars.alpha_marg, alpha_err_], 0)
   # Calc f(x) = SUM (alpha_j * y_j * kernel)
-  kernel_vals = tf.map_fn(lambda x: params["kernel"](x, all_vars.x_c),
+  kernel_vals = tf.map_fn(lambda x: params["kernel"](x, x_c),
     supp_vec_x, dtype=tf.float32,)
   return tf.tensordot(alpha_supp_, supp_vec_y*kernel_vals, [0,0]) + all_vars.b
 
 # g(x,y) = f(x)*y - 1
-def calc_g(all_vars, params):
-  return calc_f(all_vars, params) * all_vars.y_c - 1.
+def calc_g(params, all_vars):
+  return (calc_f(params, all_vars.x_c, all_vars) * all_vars.y_c 
+    - 1.)
 
 def free_add_to_marg(kernel_fn, alpha_c, x_c, y_c, all_vars):
   # print_op = tf.Print(tf.constant(1.), [], "Inside free add")
@@ -180,7 +172,7 @@ def get_trans_alpha_marg(C_svm, alpha_marg, beta_marg):
         lambda:
           tf.cond(
             tf.greater(x[1], 0),
-            lambda: (C_SVM - x[0])/x[1],
+            lambda: (C_svm - x[0])/x[1],
             lambda: tf.constant(float("Inf"))
           )
         ), 
@@ -533,12 +525,12 @@ def fit_point(params, all_vars):
     )
   return fin_vars
 
-def svm_train(x_, y_, params, all_vars):
+def _train(x_, y_, params, all_vars):
   n_ = all_vars.n + 1
   # add new point
   all_vars = all_vars._replace(x_c=x_, y_c=y_, n=n_, alpha_c=tf.constant(0.))
   # calculate g_c
-  g_c_ = calc_g(all_vars, params)
+  g_c_ = calc_g(params, all_vars)
   # g_c_ = 1.
   all_vars = all_vars._replace(g_c=g_c_)
   # condition on the value of g
@@ -547,14 +539,24 @@ def svm_train(x_, y_, params, all_vars):
     lambda: fit_point(params, all_vars)
     )
 
+def _predict(params, x_c, all_vars):
+  # calc_f
+  x_c = tf.cast(x_c, tf.float32)
+  f_c = calc_f(params, x_c, all_vars)
+  # If f_c < 0, assign label -1 else 1
+  return tf.cond(tf.less(f_c, 0),
+    lambda: tf.constant(-1),
+    lambda: tf.constant(1))
+
 # Create a namedtuple with all the required tensors
-def create_all_vars(params, scope):
+def create_all_vars(params):
   AllVars = namedtuple("AllVars", ["n", "b", "marg_vec_x", "marg_vec_y",
     "alpha_marg", "err_vec_x", "err_vec_y", "g_err", "rem_vec_x", "rem_vec_y",
     "g_rem", "x_c", "y_c", "alpha_c", "g_c", "R", "Q_s"])
 
-  model_params["namedtuple"] = AllVars
-  x_shape = model_params["shape"]
+  # Add namedtuple type to params
+  params["namedtuple"] = AllVars
+  x_shape = params["shape"]
   # TODO: check if writing simple shape is enough instead of unnecessary reshape
   all_vars = AllVars(
     n=tf.reshape(tf.get_variable("n", dtype=tf.int32).read_value(),
@@ -594,17 +596,20 @@ def create_svm_variables(x_shape):
     # Variable tensor - representing the Margin Support vector indices
     marg_vec_x_ = tf.get_variable("marg_vec_x", shape=[0, x_shape],
       validate_shape=False)
-    marg_vec_y_ = tf.get_variable("marg_vec_y", initializer=tf.constant([]))
+    marg_vec_y_ = tf.get_variable("marg_vec_y", initializer=tf.constant([]),
+      validate_shape=False)
 
     # Variable tensor - representing the Error Support vector indices
     err_vec_x_ = tf.get_variable("err_vec_x", shape=[0, x_shape],
       validate_shape=False)
-    err_vec_y_ = tf.get_variable("err_vec_y", initializer=tf.constant([]))
+    err_vec_y_ = tf.get_variable("err_vec_y", initializer=tf.constant([]),
+      validate_shape=False)
 
     # Variable tensor - representing the Remaining vector indices
     rem_vec_x_ = tf.get_variable("rem_vec_x", shape=[0, x_shape],
       validate_shape=False)
-    rem_vec_y_ = tf.get_variable("rem_vec_y", initializer=tf.constant([]))
+    rem_vec_y_ = tf.get_variable("rem_vec_y", initializer=tf.constant([]),
+      validate_shape=False)
 
     # Variable for alpha of margin vectors
     alpha_marg_ = tf.get_variable("alpha_marg", initializer=tf.constant([]),
@@ -620,7 +625,8 @@ def create_svm_variables(x_shape):
     R_ = tf.get_variable("R", initializer=tf.constant([[INF]]),
       validate_shape=False)
     # Jacobian
-    Q_s = tf.get_variable("Q_s", initializer=tf.constant([[0.]]))
+    Q_s = tf.get_variable("Q_s", initializer=tf.constant([[0.]]),
+      validate_shape=False)
     return scope
 
 def update_vars(scope, all_vars):
@@ -634,14 +640,40 @@ def update_vars(scope, all_vars):
     with tf.control_dependencies(op_list):
       return tf.constant(1.)
 
+# Returns accuracy of the model on test data
+def svm_eval(x_test, y_test, model_params):
+  model_params["shape"] = x_test.shape[1]
+  print(model_params["shape"])
+  # scope = create_svm_variables(x_shape=model_params["shape"])
+  with tf.variable_scope("svm_model", reuse=True):
+    all_vars = create_all_vars(model_params)
+
+  saver = tf.train.Saver()
+  with tf.Session() as sess:
+    if tf.train.get_checkpoint_state('./svm_model/'):
+      # Restore previous model and continue training
+      ckpt = tf.train.latest_checkpoint('./svm_model/')
+      saver.restore(sess, ckpt)
+      # Predict y based on the model for each x in test_x
+      pred_y = tf.map_fn(lambda x: _predict(model_params, x, all_vars),
+        x_test, dtype=tf.int32)
+      # Count and find the mean of the number of correct predictions 
+      labels = tf.cast(y_test, tf.int32)
+      print(sess.run(pred_y))
+      return sess.run(tf.reduce_mean(
+        tf.cast(tf.equal(pred_y, labels), tf.int32)
+        ))
+    else:
+      # Raise error
+      print("No model found to evaluate")
+      return None
+
 # svm_model_fn
-def svm_model_fn():
+# Return time taken to train
+def svm_train(x_train, y_train, model_params, restart=True, save_model=False):
+  n = x_train.shape[0]
+  print("SHAPE: ", x_train.shape[1])
   # make these command line args
-  train_file = "data_1.csv"
-  x_train, y_train = extract_data(train_file, "csv")
-  n = len(x_train)
-  # x_train = x_train[1:]
-  # y_train = y_train[1:]
   model_params["shape"] = x_train.shape[1]
 
   # Placeholders for inputs
@@ -651,28 +683,47 @@ def svm_model_fn():
   # Create namedtuple
   scope = create_svm_variables(x_shape=x_train.shape[1])
   with tf.variable_scope(scope, reuse=True):
-    all_vars = create_all_vars(model_params, scope)
+    all_vars = create_all_vars(model_params)
+
+  saver = tf.train.Saver()
   
   # TODO : Create variables to store model
   with tf.Session() as sess:
-    sess.run(tf.global_variables_initializer())
-    all_vars_upd = svm_train(x_, y_, model_params, all_vars)
-    tr = update_vars(scope, all_vars_upd)
+    if tf.train.get_checkpoint_state('./svm_model/') and not restart:
+      # Restore previous model and continue training
+      ckpt = tf.train.latest_checkpoint('./svm_model/')
+      saver.restore(sess, ckpt)
+
+    else:
+      sess.run(tf.global_variables_initializer())
+  
+    all_vars_upd = _train(x_, y_, model_params, all_vars)
+    upd_variables = update_vars(scope, all_vars_upd)
     # Check time taken
+    print("Starting")
     t1 = time.time()
     for i in range(n):
-      # print(i+1)
+      print(i+1)
       # input()
-      _, req = sess.run([tr, all_vars_upd],
+      _, req = sess.run([upd_variables, all_vars_upd],
         feed_dict={x_ : x_train[i], y_ : y_train[i]})
-      # print(req)
-        # y_all_ = tf.get_variable("y_all")
-        # print(sess.run(y_all_))
+      # Make this once every k steps - for testing k =1
+      # if (i%100 == 0):
+      #   print("Saving")
+      #   save_path = saver.save(sess, "./svm_model/my_model", global_step=i)
+    time_taken = time.time() - t1
+
+    # Save model in the end
+    if save_model:
+      save_path = saver.save(sess, "./svm_model/my_model", global_step=i)
+    # Write graph to log file to show on TensorBoard
     # writer = tf.summary.FileWriter(path_, sess.graph)
     # writer.close()
     print("MARG: ", len(req.marg_vec_x), "ERR: ", len(req.err_vec_x),
       "REM: ", len(req.rem_vec_y))
-    print("Time taken: ", time.time()-t1)
+    print("Time taken: ", time_taken)
+    return time_taken, req
+
 
 if __name__ == "__main__":
   svm_model_fn()

@@ -3,10 +3,55 @@ BTP:
 -----------------------
 
 TODO:
-1. Check elem by elem comparison with btp_python old
 2. Add check that candidate was alrady added in handle_empty_marg,
 cur_check not good enough for initial g_c=0
 3. Add iterator for getting data for tf instead of the old data loader
+4. Handle Q_c not invertible if data point is all zeros
+5. DEBUG the cancer dataset
+
+
+DISTRIB TF:
+1. One of the potentially confusing things with Distributed TensorFlow is that very often, the same code will be sent to all nodes. So your main.py or train.py or whatever you choose to call your script will be sent to the workers and the ps. Environment variables are then used to execute a certain code block on the master node, another on the workers, another on the ps, etc
+
+
+SUMMIT NOTES:
+1. Tasks:
+    i) PS tasks: hold variables and update them
+    ii) Worker tasks: intensive calculations - 
+2. Our code won;t be able to do data-parallelism
+3. Partitioning variables - 13:13
+4. Processes communicate through tf.Server - Need a cluster manager to manage the namespaces
+5. ClusterSpec defines the set of processes/
+6. Server represents task in the cluster
+7. worker tasks create session, while ps tasks just wait using join
+8. Fault tolerance through checkpointing and hooks
+
+
+MORE NOTES:
+1. jobs: random names - like (worker, ps) or just (local)
+2. tasks: actual processes - hostname:port specifiy
+
+
+
+-----------------------------------------------------
+19-03
+----DONE----
+1. Write code for prediction
+2. Write code for saving
+3. Write code for testing with a bunch of datasets
+
+------------
+
+4. Try adding distributed code
+
+16-03
+1. Error with grpc calls - fixed it by unsetting the http and https_proxy variables.
+
+15-03
+1. Try first in local: two tasks - one for gpu and another for cpu, talking btw processes is done by TF
+2. Try ClusterManager: Currently, no direct support for any cluster manager and manual specifications of task is to be done - Good for me, I can blame TF :)
+
+
 
 
 14-03
