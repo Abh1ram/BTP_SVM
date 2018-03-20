@@ -1,13 +1,16 @@
 BTP:
-
+Design decisions:
+1. To fix initial g_c=0, added the point to rem_vec. Shouldn;t be a problem as if marg_vec is empty, the candidate in next round will move this point or push it further away.
+    More importantly, it's alpha is 0 at this stage and it shouldn't be a problem.
 -----------------------
+COMPLETE CV
 
 TODO:
 2. Add check that candidate was alrady added in handle_empty_marg,
-cur_check not good enough for initial g_c=0
+    cur_check not good enough for initial g_c=0
 3. Add iterator for getting data for tf instead of the old data loader
-4. Handle Q_c not invertible if data point is all zeros
-5. DEBUG the cancer dataset
+4. When you add classes, rememeber to check that labels are -1,1 and do appropriate scaling and
+    scaling back
 
 
 DISTRIB TF:
@@ -32,8 +35,14 @@ MORE NOTES:
 2. tasks: actual processes - hostname:port specifiy
 
 
-
+COMPLETE CV
 -----------------------------------------------------
+20-03
+1. Debug the test_code - based on initial g_c = 0 and 
+    dumb mistake - forgot to make labels (1, -1) from 1, 0
+2. Add dist code
+
+
 19-03
 ----DONE----
 1. Write code for prediction

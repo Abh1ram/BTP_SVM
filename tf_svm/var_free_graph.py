@@ -536,7 +536,7 @@ def _train(x_, y_, params, all_vars):
   # condition on the value of g
   return tf.cond(tf.greater(g_c_, 0),
     lambda: add_to_rem(params["eps"], g_c_, x_, y_, all_vars),
-    lambda: fit_point(params, all_vars)
+    lambda: fit_point(params, all_vars),
     )
 
 def _predict(params, x_c, all_vars):
@@ -641,10 +641,11 @@ def update_vars(scope, all_vars):
       return tf.constant(1.)
 
 # Returns accuracy of the model on test data
-def svm_eval(x_test, y_test, model_params):
+def svm_eval(x_test, y_test, model_params, standalone=False):
   model_params["shape"] = x_test.shape[1]
   print(model_params["shape"])
-  # scope = create_svm_variables(x_shape=model_params["shape"])
+  if standalone:
+    scope = create_svm_variables(x_shape=model_params["shape"])
   with tf.variable_scope("svm_model", reuse=True):
     all_vars = create_all_vars(model_params)
 
@@ -659,7 +660,7 @@ def svm_eval(x_test, y_test, model_params):
         x_test, dtype=tf.int32)
       # Count and find the mean of the number of correct predictions 
       labels = tf.cast(y_test, tf.int32)
-      print(sess.run(pred_y))
+      # print(sess.run(pred_y))
       return sess.run(tf.reduce_mean(
         tf.cast(tf.equal(pred_y, labels), tf.int32)
         ))
@@ -670,7 +671,7 @@ def svm_eval(x_test, y_test, model_params):
 
 # svm_model_fn
 # Return time taken to train
-def svm_train(x_train, y_train, model_params, restart=True, save_model=False):
+def svm_train(x_train, y_train, model_params, restart=True, save_model=True):
   n = x_train.shape[0]
   print("SHAPE: ", x_train.shape[1])
   # make these command line args
@@ -696,6 +697,25 @@ def svm_train(x_train, y_train, model_params, restart=True, save_model=False):
 
     else:
       sess.run(tf.global_variables_initializer())
+      # if directory ./svm_model/ exists model it to save new model to prevent
+      # mixing of models
+      if save_model and os.path.isdir('./svm_model'):
+        import shutil
+        # create old_model if it doesn;t exist
+        if not os.path.exists('./old_model/'):
+          os.makedirs('./old_model')
+        # REmove old files in /old_files/
+        for file in os.listdir('./old_model'):
+          file_path = os.path.join('./old_model/', file)
+          try:
+            if os.path.isfile(file_path):
+              os.unlink(file_path)
+          except Exception as e:
+            print(e)
+        # Move files from ./svm_model to old_model
+        for f in os.listdir('./svm_model'):
+          shutil.move(os.path.join('./svm_model/', f), './old_model')
+
   
     all_vars_upd = _train(x_, y_, model_params, all_vars)
     upd_variables = update_vars(scope, all_vars_upd)
@@ -704,9 +724,10 @@ def svm_train(x_train, y_train, model_params, restart=True, save_model=False):
     t1 = time.time()
     for i in range(n):
       print(i+1)
-      # input()
       _, req = sess.run([upd_variables, all_vars_upd],
         feed_dict={x_ : x_train[i], y_ : y_train[i]})
+      # print(req)
+      # input()
       # Make this once every k steps - for testing k =1
       # if (i%100 == 0):
       #   print("Saving")
@@ -715,15 +736,20 @@ def svm_train(x_train, y_train, model_params, restart=True, save_model=False):
 
     # Save model in the end
     if save_model:
+      print("Saving model...")
       save_path = saver.save(sess, "./svm_model/my_model", global_step=i)
     # Write graph to log file to show on TensorBoard
     # writer = tf.summary.FileWriter(path_, sess.graph)
     # writer.close()
     print("MARG: ", len(req.marg_vec_x), "ERR: ", len(req.err_vec_x),
-      "REM: ", len(req.rem_vec_y))
+      "REM: ", len(req.rem_vec_x))
     print("Time taken: ", time_taken)
     return time_taken, req
 
 
 if __name__ == "__main__":
-  svm_model_fn()
+  x_all, y_all = extract_data("data_1.csv", "csv")
+  params = {"C": 5., "eps": float("Inf"), "kernel":simple_kernel}
+  with tf.device("/cpu:0"):
+    # svm_train(x_all[:800], y_all[:800], params)
+    print(svm_eval(x_all[800:], y_all[800:], params, standalone=True))

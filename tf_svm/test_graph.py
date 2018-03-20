@@ -14,7 +14,7 @@ from var_free_graph import simple_kernel, svm_train, svm_eval
 
 
 C_SVM = 5.
-RESERVE_THRESHOLD = 5.
+RESERVE_THRESHOLD = float("Inf")
 
 model_params = {
   "C" : C_SVM,
@@ -26,7 +26,7 @@ model_params = {
 # x_train = x_train[1:]
 # y_train = y_train[1:]
 
-def compare(X, y, partial_=True):
+def compare(X, y, partial_=True, save_file=False):
     big = np.append(X, y.reshape(-1,1), axis=1)
     np.random.shuffle(big)
 
@@ -49,34 +49,38 @@ def compare(X, y, partial_=True):
         # print("Lengths of train and test: ", len(train_index), len(test_index))
         X_train, X_test = X[train_index], X[test_index]
         y_train, y_test = y[train_index], y[test_index]
-        pickle.dump((X_train, y_train), open("random_cancer.p", "wb"))
+        if save_file:
+            pickle.dump((X_train, y_train), open("random_cancer.p", "wb"))
 
-        # n = len(X_train)
-        # print("Starting standard training", partial_)
-        # if not partial_:
-        #     clf = svm.SVC(kernel="linear", shrinking=False)
-        #     t1 = time.time()
-        #     clf.fit(X_train, y_train)
-        #     time_std += time.time()-t1
-        #     # print((clf.support_))
-        #     # print("Length: ")
-        #     # print(len(clf.support_))
-        # else:
-        #     # alpha = 1/X_train.shape[0]
-        #     clf = linear_model.SGDClassifier()
-        #     t1 = time.time()
-        #     for jj in range(2):
-        #         for ii in range(0, len(X_train), 15):
-        #             upper = min(ii+15, len(X_train))
-        #             clf.partial_fit(X_train[ii : upper], y_train[ii : upper], np.array([0, 1]))
-        #     time_std += time.time()-t1
-        #     # print("TIme taken for SGDClassifier: ", time.time()-t1)
-        # print("Starting standard prediction")
-        # pred = clf.predict(X_test)
-        # acc_std = accuracy_score(y_test, pred)
+        n = len(X_train)
+        print("Starting standard training", partial_)
+        if not partial_:
+            clf = svm.SVC(kernel="linear", shrinking=False)
+            t1 = time.time()
+            clf.fit(X_train, y_train)
+            time_std += time.time()-t1
+            # print((clf.support_))
+            # print("Length: ")
+            # print(len(clf.support_))
+        else:
+            # alpha = 1/X_train.shape[0]
+            clf = linear_model.SGDClassifier()
+            t1 = time.time()
+            for jj in range(2):
+                for ii in range(0, len(X_train), 15):
+                    upper = min(ii+15, len(X_train))
+                    clf.partial_fit(X_train[ii : upper], y_train[ii : upper], np.array([0, 1]))
+            time_std += time.time()-t1
+            # print("TIme taken for SGDClassifier: ", time.time()-t1)
+        print("Starting standard prediction")
+        pred = clf.predict(X_test)
+        acc_std = accuracy_score(y_test, pred)
         # print("Standard accuracy: ", acc_std)
         # print("Time std: ", time_std)
         # Check performance of  my model
+        # make labels -1, 1
+        y_train = y_train*2 - 1
+        y_test = y_test * 2 - 1
         with tf.device("/cpu:0"):
           time_mine,_ = svm_train(X_train, y_train, model_params, restart=True)
           acc_mine = svm_eval(X_test, y_test, model_params)
@@ -106,6 +110,10 @@ X, y = \
 print("Size of dataset: ", X.shape)
 y_uniq = np.unique(y)
 
+for x in X:
+    if sum(abs(x)) == 0:
+        print(x)
+        input()
 # convert multi-class to two classes
 if len(y_uniq) != 2:
     print(y_uniq)
@@ -122,4 +130,4 @@ if len(y_uniq) != 2:
         compare(X, y2, partial_=True)
 
 else:
-    compare(X, y, partial_=False)
+    compare(X, y, partial_=False, save_file=True)
