@@ -1,32 +1,11 @@
-import matplotlib.pyplot as plt
 import numpy as np
 import pickle
+import sys
 import time
 
 from sklearn import svm, datasets, linear_model
 from sklearn.model_selection import KFold
 from btp_python import SVM_Online
-
-
-def mesh_plot(X, y, svc):
-    # create a mesh to plot in
-    x_min, x_max = X[:, 0].min() - 1, X[:, 0].max() + 1
-    y_min, y_max = X[:, 1].min() - 1, X[:, 1].max() + 1
-    h = (x_max - x_min)/100
-    xx, yy = np.meshgrid(np.arange(x_min, x_max, h),
-     np.arange(y_min, y_max, h))
-
-    plt.subplot(1, 1, 1)
-    Z = svc.predict(np.c_[xx.ravel(), yy.ravel()])
-    Z = Z.reshape(xx.shape)
-    plt.contourf(xx, yy, Z, cmap=plt.cm.Paired, alpha=0.8)
-
-    plt.scatter(X[:, 0], X[:, 1], c=y, cmap=plt.cm.Paired)
-    plt.xlabel('Sepal length')
-    plt.ylabel('Sepal width')
-    plt.xlim(xx.min(), xx.max())
-    plt.title('SVC with linear kernel')
-    plt.show()
 
 def compare(X, y, partial_=True):
     # print(y.reshape(-1, 1)[:5,:])
@@ -36,7 +15,6 @@ def compare(X, y, partial_=True):
     tot_pts = X.shape[0]
 
     np.random.shuffle(big)
-    pickle.dump(big, open("random_cancer.p", "wb"))
 
     X = big[:, :-1]
     y = big[:, -1]
@@ -58,6 +36,7 @@ def compare(X, y, partial_=True):
         X_train, X_test = X[train_index], X[test_index]
         y_train, y_test = y[train_index], y[test_index]
 
+        pickle.dump((X_train, y_train), open("random_cancer.p", "wb"))
         n = len(X_train)
 
         if not partial_:
@@ -138,19 +117,26 @@ def compare(X, y, partial_=True):
 
 
 # try on different datasets
-# X, y = (datasets.load_breast_cancer(True))
-# X, y = (datasets.load_iris(True))
-X, y = (datasets.load_digits(10,True))
-# X, y = (datasets.load_wine(True))
-
-print(X.shape)
-input()
+dataset_typ = int(sys.argv[1])
+print("TYPE: ", dataset_typ)
+input("ENTER STH TO START: ")
+X, y = \
+{
+  0 : datasets.load_breast_cancer(True),
+  1 : datasets.load_iris(True),
+  2 : datasets.load_digits(10,True),
+  3 : datasets.load_wine(True),
+}[dataset_typ]
+print("Size of dataset: ", X.shape)
 y_uniq = np.unique(y)
+print(y_uniq)
+input()
+
 
 # convert multi-class to two classes
 if len(y_uniq) != 2:
     print(y_uniq)
-    for i in range(3, y_uniq.shape[0]):
+    for i in range(y_uniq.shape[0]):
         print()
         print("-----------------------------------")
         print(i)
@@ -160,7 +146,7 @@ if len(y_uniq) != 2:
                 y2[j] = 0
             else:
                 y2[j] = 1
-        compare(X, y2, partial_=True)
+        compare(X, y2, partial_=False)
 
 else:
     compare(X, y, partial_=False)
