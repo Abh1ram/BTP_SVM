@@ -16,7 +16,7 @@ from data_loader import extract_data
 float_threshold = 10**-8
 INF = 10**10
 # float('Inf')
-
+eps2 = 2*(10**-6)
 
 def is_close(a, b):
   if abs(a-b) < float_threshold:
@@ -47,7 +47,8 @@ def kernel(x1, x2):
 
 # @cache this
 def calc_Q(x1, y1, x2, y2):
-  return y1*y2*kernel(x1, x2)
+  return np.array(y1*y2*kernel(x1, x2)) + eps2
+  # .astype(np.float32) + eps
 
 
 class SVM_Online:
@@ -58,8 +59,8 @@ class SVM_Online:
       self.file_type = file_type
       # All data
       self.x_all, self.y_all = extract_data(filename, file_type)
-      self.x_all = self.x_all[:500]
-      self.y_all = self.y_all[:500]
+      # self.x_all = self.x_all[:500]
+      # self.y_all = self.y_all[:500]
 
 
     else:
@@ -83,7 +84,7 @@ class SVM_Online:
     self.alpha_all = []
 
     # offset
-    self.b_ = 0
+    self.b_ = 0.
     # Regularization parameter
     self.C_svm = C_svm
     # points seen
@@ -135,6 +136,8 @@ class SVM_Online:
       return -1
 
   def add_support_R(self, elem_index):
+    # print("Adding...")
+    # eps = 2*(10**-6)/self.C_svm
     x_c = self.get_x(elem_index)
     y_c = self.y_all[elem_index]
 
@@ -144,17 +147,49 @@ class SVM_Online:
       indx = self.Margin_v[i]
       beta_calc[i+1][0] = calc_Q(self.get_x(indx), self.y_all[indx], x_c, y_c)
 
+    # print("Addiing support: ", np.dot(-1*self.R_, beta_calc))
     # print(self.Q_, beta_calc)
     beta_calc = np.append(beta_calc, [[calc_Q(x_c, y_c, x_c, y_c)]], axis=0)
-
+    # beta_calc += eps
     # print(self.Q_, beta_calc)
     Q_temp = np.concatenate( (self.Q_, beta_calc.transpose()[:,:-1]), axis=0)
     self.Q_ = np.concatenate( (Q_temp, beta_calc), axis=1)
-    self.R_ = np.linalg.inv(self.Q_)
+    # To calculate R:
+    if len(self.Margin_v) == 0:
+      # print("HREH")
+      self.R_ = np.linalg.inv(self.Q_)
+    else:
+      R_ = self.R_
+      beta_calc = beta_calc[:-1, :]
+      beta = np.dot(-1*R_, beta_calc)
+
+      # calc pivot/gamma
+      gamma_c = beta[0][0] * y_c + calc_Q(x_c, y_c, x_c, y_c)
+      for i in range(len(self.Margin_v)):
+        indx = self.Margin_v[i]
+        gamma_c += calc_Q(self.get_x(indx), self.y_all[indx], x_c, y_c)*beta[i+1][0]
+      # pivot check
+      
+      if gamma_c < eps2:
+        print("Does this even happen: ", gamma_c)
+        gamma_c = eps2
+      # Calc R
+      beta = np.append(beta, [[1.]], axis=0)
+      n = self.R_.shape[0]
+      R_ = np.zeros((n+1, n+1))
+      R_[:-1, :-1] = self.R_
+      # print(beta)
+      # print(gamma_c)
+      self.R_ = R_ + 1/gamma_c*beta*beta.transpose()
+    self.stabilize_R()
+
 
   def rem_support_R(self, elem_index):
+    # print("Removing...")
     R_mat = self.R_
     k = self.Margin_v.index(elem_index) + 1
+    if R_mat[k][k] == 0:
+      R_mat[k][k] = 10**-8
     if R_mat[k][k] != 0:
       for i in range((R_mat.shape[0])):
         for j in range((R_mat.shape[1])):
@@ -163,11 +198,33 @@ class SVM_Online:
       R_mat = np.delete(R_mat, k, axis=0)
       R_mat = np.delete(R_mat, k, axis=1)
 
-    else:
-      R_mat = np.array([[-INF]])
     self.Q_ = np.delete(self.Q_, k, axis=0)
     self.Q_ = np.delete(self.Q_, k, axis=1)
-    self.R_ = R_mat
+    # self.R_ = R_mat
+    if self.Q_.shape[0] == 1:
+      self.R_ = np.array([[-INF]])
+    else:
+      self.R_ = R_mat
+    self.stabilize_R()
+    # numerical stability correction for R
+    
+  def stabilize_R(self):
+    R_ = self.R_
+    # .astype(np.float32)
+    Q_ = self.Q_
+    # .astype(np.float32)
+    R_tr = R_.transpose()
+    self.R_ = R_ + R_tr - np.dot(np.dot(R_, Q_), R_tr)
+    # print("MARG: ", len(self.Margin_v), "\nERR: ", len(self.Error_v))
+    # print("N: ", self.n-1)
+    # print("-----------------------------")
+    # print(self.R_)
+    # # if (Q_.shape[0] != 1):
+    # #   self.R_ = np.linalg.inv(Q_) 
+    # #   print(np.linalg.inv(Q_))
+    # input()
+    # print("-----------------")
+    
 
   def calc_g(self, x_c, y_c):
     # f(x) = (Sum alpha_j*y_j*kernel(x_c, x_j)) + b
@@ -374,6 +431,7 @@ class SVM_Online:
 
 
   def handle_empty_marg_set(self):
+    # print("Inside empty handler")
     n = self.n
     x_c = self.x_all[n-1]
     y_c = self.y_all[n-1]
@@ -408,13 +466,13 @@ class SVM_Online:
     #   print("Free moved ", n-1)
 
     for indx in self.Remain_v:
-      if self.y_all[indx]*y_c < 0 and self.g_all[indx] == 0:
+      if self.y_all[indx]*y_c < 0 and self.g_all[indx] <= 0:
         self.add_support_R(indx)
         self.Margin_v.append(indx)
         self.Remain_v.remove(indx)
 
     for indx in self.Error_v:
-      if self.y_all[indx]*y_c > 0 and self.g_all[indx] == 0:
+      if self.y_all[indx]*y_c > 0 and self.g_all[indx] >= 0:
         self.add_support_R(indx)
         self.Margin_v.append(indx)
         self.Error_v.remove(indx)
@@ -429,12 +487,6 @@ class SVM_Online:
 
     g_c = self.calc_g(x_c, y_c)
     self.g_all.append(g_c)
-    # print("\n\nStarting\nMargin Vectors: %s \n Error vectors: %s" %(self.Margin_v,
-    #   self.Error_v))
-    # print("b: ", self.b_)
-    # print("g: ", g_c)
-    # print("alpha: ", self.alpha_all)
-    # input()
     # Add candidate to Remaining vector      
     if (g_c > 0):
       # add threshold check to add into the list
@@ -485,6 +537,12 @@ class SVM_Online:
 
         # Should make this a list of elements
         min_alpha = min(transition_alpha)
+        # print("\nTRANS: ", transition_alpha, self.Margin_v, self.Error_v,
+        #   min_alpha)
+        # print("BETA: ", beta_sup)
+        # print("MARG: ", self.Margin_v, self.Error_v)
+        # print("GAMMA: ", gamma_)
+        # print("R: ", self.R_)
         transition_vectors = []
         for i in range(n):
           if transition_alpha[i] == min_alpha:
@@ -492,13 +550,14 @@ class SVM_Online:
             # ------ REMOVE THIS
             break
 
-        # DEBUG
+        # # DEBUG
         # if n >0:
+        #   print("n: ", n)
         #   print("MArg: ", self.Margin_v)
         #   print("Err: ", self.Error_v)
         #   print("Remain: ", self.Remain_v)
         #   print("G: ", self.g_all)
-        #   print("ALL ALPAH: ", self.alpha_all)
+        #   print("ALL ALPHA: ", self.alpha_all)
         #   print("gamma_: ", gamma_)
         #   print("TRANS: ", transition_alpha)
         #   print("VECS: ", transition_vectors)
@@ -557,14 +616,24 @@ class SVM_Online:
         if (is_close(self.alpha_all[n-1], self.C_svm)):
           self.Error_v.append(n-1)
           break
+    # print("After\nMargin Vectors: %s \n Error vectors: %s" %(self.Margin_v,
+    #   self.Error_v,))
+    # print(self.x_all[:n], self.y_all[:n])
+    # print("n: ", n)
+    # print("ITER: ", self.tot_iter)
+    # print("b: ", self.b_)
+    # print("g: ", g_c)
+    # print("alpha: ", self.alpha_all)
+    # input()
+    # print("\n\n")
 
 
 
 if __name__ == "__main__":
-  svm = SVM_Online(filename="data_1.csv", file_type="csv", C_svm=1)
+  svm = SVM_Online(filename="data_1.csv", file_type="csv", C_svm=5.)
   svm.train_all()
-  print(svm.Margin_v)
-  print(len(svm.Error_v))
+  print(len(svm.Margin_v))
+  print(len(svm.Error_v), len(svm.Remain_v))
   svm.dec_bdry()
   # print(svm.Margin_v)
   # print(len(svm.Error_v))

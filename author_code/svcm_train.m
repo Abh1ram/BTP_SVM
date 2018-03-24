@@ -1,4 +1,4 @@
-function [a, b, g, inds, inde, indw] = svcm_train(x, y, C);
+function [a, b, g, inds, inde, indw, iter, processed] = svcm_train(x, y, C);
 % function [a, b, g, inds, inde, indw] = svcm_train(x, y, C);
 %        support vector classification machine
 %        incremental learning, and leave-one-out cross-validation
@@ -17,14 +17,14 @@ function [a, b, g, inds, inde, indw] = svcm_train(x, y, C);
 %        indw: indices of wrongly classified leave-one-out vectors
 
 %%%%%%%%%% version 1.11; last revised 06/07/2002; send comments to gert@jhu.edu %%%%%%%%%%
-
+warning('off', 'all');
 %%% GLOBAL VARIABLES:
 global doloo online query terse verbose debug memoryhog visualize eps
 if isempty(doloo)
-    doloo = 1;                        % perform loo at end of training
+    doloo = 0;                        % perform loo at end of training
 end
 if isempty(online)
-    online = 0;                       % take data in the order it is presented
+    online = 1;                       % take data in the order it is presented
 end
 if isempty(query)
     query = 0;                        % choose next point based on margin distribution
@@ -220,7 +220,7 @@ while continued                    % check for remaining free points or leave-on
             if any(any(~void))
                 warning off % suppress div. by 0
                 zlims = z0+(C*(betaa*polc>0)-a(inds))./betaa;
-                warning on
+                % warning on
                 zlims(void) = polc*Inf;          % ... which don't enter the constraints
                 [zmins, is] = min(zlims*polc,[],1);
                 imin = find(zlims==zmins);
@@ -245,7 +245,7 @@ while continued                    % check for remaining free points or leave-on
             if any(any(~void))
                 warning off % suppress div. by 0
                 zlime = z0-g(inde)./gammae;
-                warning on
+                % warning on
                 zlime(void) = polc*Inf;          % ... which don't enter the constraints
                 [zmine, ie] = min(zlime*polc,[],1);
                 imin = find(zlime==zmine);
@@ -270,7 +270,7 @@ while continued                    % check for remaining free points or leave-on
         if any(any(~void))
             warning off % suppress div. by 0
             zlimo = z0-g(indo)./gammao;
-            warning on 
+            % warning on 
             zlimo(void) = polc*Inf;              % ... which don't enter the constraints
             [zmino, io] = min(zlimo*polc,[],1);
             imin = find(zlimo==zmino);
@@ -420,7 +420,10 @@ while continued                    % check for remaining free points or leave-on
     if incl_inds                        % move buffer indb into support vectors inds
         inds = [inds; indb];                     % move to inds ...
         ls = ls+1;
-        Qs = [Qs; Qb];                           % and also Qs and R ...
+        % disp(Qs);
+        Qs = [Qs; Qb];
+        % disp(Qs);                        % and also Qs and R ...
+        % disp(Qb);
         if ls==1                                 % compute R directly
             R = [-Qb(indb), y(indb); y(indb), 0];
         else                                     % compute R recursively
@@ -434,14 +437,25 @@ while continued                    % check for remaining free points or leave-on
                 fprintf('\nsvcm_train error: pivot = %g < %g in R expansion\n\n', pivot, eps2)
                 pivot = eps2;
             end
+            % disp('Pivot: ')
+            % disp(pivot)
+            % disp(beta)
             R = [R,zeros(ls,1);zeros(1,ls+1)]+[beta;1]*[beta',1]/pivot;
+
+            % disp(inds)
         end
     end
 
     % minor correction in R to avoid numerical instability in recursion when data is near-singular
     Qss = [[0;y(inds)],Qs(:,inds)];
-    R = R+R'-R*Qss*R';
-
+    % R = R+R'-R*Qss*R';
+    % disp('marg: ')
+    % disp(inds)
+    % disp('proc: ')
+    % disp(sum(processed))
+    % disp('R: ')
+    % disp(R)
+    % input('Pick a number: ')
     % indc index adjustments (including leave-one-out)
     if converged & (upc|flag==2)                % indc is now part of inds or inde
         i = find(indo==indc);

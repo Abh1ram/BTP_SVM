@@ -16,10 +16,14 @@ from data_loader import extract_data
 path_ = os.path.join("log_graph")
 
 INF = 10**12 + 0.
-
+eps_cor = 2*(10**-6)/5.
 # Simple dot product - returns a rank 0 tensor/scalar
 def simple_kernel(x1, x2):
   return tf.tensordot(x1, x2, [0,0])
+
+def stabilize_R(R_, Q_):
+  R_tr = tf.transpose(R_)
+  return R_ + R_tr - tf.matmul(R_, tf.matmul(Q_, R_tr))
 
 # Calc f(x) = SUM (alpha_j * y_j * kernel(x_j, x)) for j in support vectors - marg, err
 def calc_f(params, x_c, all_vars):
@@ -69,6 +73,7 @@ def free_add_to_marg(kernel_fn, alpha_c, x_c, y_c, all_vars):
 
 def add_to_marg(kernel_fn, alpha_c, x_c, y_c, beta_c, gamma_c,
  is_cur_c, all_vars):
+  Q_ = all_vars.Q_s
   R_ = all_vars.R
   marg_vec_x_ = all_vars.marg_vec_x
   marg_vec_y_ = all_vars.marg_vec_y
@@ -85,7 +90,11 @@ def add_to_marg(kernel_fn, alpha_c, x_c, y_c, beta_c, gamma_c,
     lambda: get_gamma(kernel_fn, x_c, y_c, tf.reshape(x_c, [1, -1]),
       tf.reshape(y_c, [1,]), beta_c, all_vars)[0],
     lambda: gamma_c)
-
+  # author's code correction
+  gamma_c = tf.cond(
+    tf.less(gamma_c, eps_cor),
+    lambda: eps_cor,
+    lambda: gamma_c)
   beta_c = tf.concat([beta_c, tf.constant([1.])], 0)
   # calculate beta_c' * beta_c
   beta_mat = tf.matmul(
@@ -96,12 +105,22 @@ def add_to_marg(kernel_fn, alpha_c, x_c, y_c, beta_c, gamma_c,
   pad_R = tf.constant([[0, 1], [0, 1]])
   R_ = tf.pad(R_, pad_R, "CONSTANT")
   R_ = R_ + beta_mat
+  # Similarly calculate Q
+  q_marg_c = get_Q_vec(kernel_fn, x_c, y_c, marg_vec_x_, marg_vec_y_)
+  q_cc = get_Q_vec(kernel_fn, x_c, y_c, tf.reshape(x_c, [1, -1]),
+      tf.reshape(y_c, [1,]))
+  q_marg_c = tf.concat([tf.reshape(y_c, [1, ]), q_marg_c, q_cc], 0)
+  # add new row and column to Q_
+  Q_ = tf.concat([Q_, tf.reshape(q_marg_c[:-1], [1, -1])], 0)
+  Q_ = tf.concat([Q_, tf.reshape(q_marg_c, [-1, 1])], 1)
+  # stabiilize R
+  R_ = stabilize_R(R_, Q_)
   # add x_c, y_c and alpha to marg_vec_x marg_vc_y and alpha_marg
   marg_vec_x_ = tf.concat([marg_vec_x_, tf.reshape(x_c, [1, -1])], 0)
   marg_vec_y_ = tf.concat([marg_vec_y_, tf.reshape(y_c, [1,])], 0)
   alpha_marg_ = tf.concat([alpha_marg_, tf.reshape(alpha_c, [1,])], 0)
 
-  return all_vars._replace(R=R_, marg_vec_x=marg_vec_x_,
+  return all_vars._replace(Q_s=Q_, R=R_, marg_vec_x=marg_vec_x_,
     marg_vec_y=marg_vec_y_, alpha_marg=alpha_marg_)
 
 def add_to_err(g_c, x_c, y_c, all_vars):
@@ -136,7 +155,7 @@ def get_Q_vec(kernel_fn, x_c, y_c, vec_x, vec_y):
   q_tens = tf.map_fn(lambda x: kernel_fn(x_c, x), vec_x)
   q_tens = q_tens * y_c
   q_tens = q_tens * vec_y
-  return q_tens
+  return q_tens + eps_cor
 
 def get_beta(kernel_fn, x_c, y_c, all_vars):
   q_tens = get_Q_vec(kernel_fn, x_c, y_c, all_vars.marg_vec_x,
@@ -211,6 +230,7 @@ def update_val(min_alpha, beta, gamma_err, gamma_rem, gamma_c, all_vars):
 
 def rem_from_marg(kernel_fn, min_marg_indx, all_vars):
   R_ = all_vars.R
+  Q_ = all_vars.Q_s
   marg_vec_x_ = all_vars.marg_vec_x
   marg_vec_y_ = all_vars.marg_vec_y
   alpha_marg_ = all_vars.alpha_marg
@@ -225,12 +245,17 @@ def rem_from_marg(kernel_fn, min_marg_indx, all_vars):
   # drop kth row and column
   R_ = tf.concat([R_[:k, :], R_[k+1:, :]], 0)
   R_ = tf.concat([R_[:, :k], R_[:, k+1:]], 1)
+  # drop kth row and column for Q
+  Q_ = tf.concat([Q_[:k, :], Q_[k+1: , :]], 0)
+  Q_ = tf.concat([Q_[:, :k], Q_[:, k+1:]], 1)
+  # stabilize R
+  R_ = stabilize_R(R_, Q_)
   # drop min_mar_indx from marg_vec_x and y and alpha_marg
   marg_vec_x_ = tf.concat([marg_vec_x_[:k-1], marg_vec_x_[k:]], 0)
   marg_vec_y_ = tf.concat([marg_vec_y_[:k-1], marg_vec_y_[k:]], 0)
   alpha_marg_ = tf.concat([alpha_marg_[:k-1], alpha_marg_[k:]], 0)
 
-  return all_vars._replace(R=R_, marg_vec_x=marg_vec_x_,
+  return all_vars._replace(Q_s=Q_, R=R_, marg_vec_x=marg_vec_x_,
     marg_vec_y=marg_vec_y_, alpha_marg=alpha_marg_)
 
 def rem_from_rem(indx, all_vars):
@@ -629,8 +654,8 @@ def create_svm_variables(x_shape):
       validate_shape=False)
     return scope
 
-def update_vars(scope, all_vars):
-  with tf.variable_scope(scope, reuse=True):
+def update_vars(all_vars):
+  with tf.variable_scope("svm_model", reuse=True):
     op_list = []
     for field in set(all_vars._fields) - set(["x_c", "y_c", "alpha_c", "g_c", "n"]):
       op_list.append(tf.assign(tf.get_variable(field), getattr(all_vars, field),
@@ -641,11 +666,11 @@ def update_vars(scope, all_vars):
       return tf.constant(1.)
 
 # Returns accuracy of the model on test data
-def svm_eval(x_test, y_test, model_params, standalone=False):
+def svm_eval(x_test, y_test, model_params):
   model_params["shape"] = x_test.shape[1]
   print(model_params["shape"])
-  if standalone:
-    scope = create_svm_variables(x_shape=model_params["shape"])
+  # if standalone:
+  #   scope = create_svm_variables(x_shape=model_params["shape"])
   with tf.variable_scope("svm_model", reuse=True):
     all_vars = create_all_vars(model_params)
 
@@ -682,8 +707,8 @@ def svm_train(x_train, y_train, model_params, restart=True, save_model=True):
   y_ = tf.placeholder(tf.float32, shape=())
 
   # Create namedtuple
-  scope = create_svm_variables(x_shape=x_train.shape[1])
-  with tf.variable_scope(scope, reuse=True):
+  # scope = create_svm_variables(x_shape=x_train.shape[1])
+  with tf.variable_scope("svm_model", reuse=True):
     all_vars = create_all_vars(model_params)
 
   saver = tf.train.Saver()
@@ -718,7 +743,7 @@ def svm_train(x_train, y_train, model_params, restart=True, save_model=True):
 
   
     all_vars_upd = _train(x_, y_, model_params, all_vars)
-    upd_variables = update_vars(scope, all_vars_upd)
+    upd_variables = update_vars(all_vars_upd)
     # Check time taken
     print("Starting")
     t1 = time.time()
@@ -751,5 +776,5 @@ if __name__ == "__main__":
   x_all, y_all = extract_data("data_1.csv", "csv")
   params = {"C": 5., "eps": float("Inf"), "kernel":simple_kernel}
   with tf.device("/cpu:0"):
-    # svm_train(x_all[:800], y_all[:800], params)
-    print(svm_eval(x_all[800:], y_all[800:], params, standalone=True))
+    svm_train(x_all, y_all, params)
+    # print(svm_eval(x_all[800:], y_all[800:], params, standalone=True))

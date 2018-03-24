@@ -2,10 +2,17 @@ BTP:
 Design decisions:
 1. To fix initial g_c=0, added the point to rem_vec. Shouldn;t be a problem as if marg_vec is empty, the candidate in next round will move this point or push it further away.
     More importantly, it's alpha is 0 at this stage and it shouldn't be a problem.
+
+PROBLEMS:
+1. MORE??????? - the precision and calculations have become too sensitive
+and are easily going crazy
+
+
 -----------------------
 COMPLETE CV
 
 TODO:
+1 Understand and implement the author's code
 2. Add check that candidate was alrady added in handle_empty_marg,
     cur_check not good enough for initial g_c=0
 3. Add iterator for getting data for tf instead of the old data loader
@@ -37,6 +44,11 @@ MORE NOTES:
 
 COMPLETE CV
 -----------------------------------------------------
+22-03
+1. My code fails with certain test cases - singular matrix, infinite loop
+2. The author's code seems to work for these data
+3. Time to read and implement his code
+
 20-03
 1. Debug the test_code - based on initial g_c = 0 and 
     dumb mistake - forgot to make labels (1, -1) from 1, 0

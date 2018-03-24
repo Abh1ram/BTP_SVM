@@ -10,7 +10,7 @@ from sklearn.metrics import accuracy_score
 from sklearn.model_selection import KFold
 
 from data_loader import extract_data
-from var_free_graph import simple_kernel, svm_train, svm_eval
+from var_free_graph import simple_kernel, svm_train, svm_eval, create_svm_variables
 
 
 C_SVM = 5.
@@ -50,7 +50,10 @@ def compare(X, y, partial_=True, save_file=False):
         X_train, X_test = X[train_index], X[test_index]
         y_train, y_test = y[train_index], y[test_index]
         if save_file:
-            pickle.dump((X_train, y_train), open("random_cancer.p", "wb"))
+            typ = int(sys.argv[1])
+            pickle.dump((X_train, y_train), open("train_data_%d.p" %typ, "wb"))
+            pickle.dump((X_test, y_test), open("test_data_%d.p" %typ, "wb"))
+
 
         n = len(X_train)
         print("Starting standard training", partial_)
@@ -109,6 +112,9 @@ X, y = \
 }[dataset_typ]
 print("Size of dataset: ", X.shape)
 y_uniq = np.unique(y)
+
+# create svm tf variables
+create_svm_variables(x_shape=X.shape[1])
 
 for x in X:
     if sum(abs(x)) == 0:

@@ -7,7 +7,7 @@ from sklearn import svm, datasets, linear_model
 from sklearn.model_selection import KFold
 from btp_python import SVM_Online
 
-def compare(X, y, partial_=True):
+def compare(X, y, partial_=True, save_file=False):
     # print(y.reshape(-1, 1)[:5,:])
     big = np.append(X, y.reshape(-1,1), axis=1)
 
@@ -35,8 +35,9 @@ def compare(X, y, partial_=True):
         # print("Lengths of train and test: ", len(train_index), len(test_index))
         X_train, X_test = X[train_index], X[test_index]
         y_train, y_test = y[train_index], y[test_index]
-
-        pickle.dump((X_train, y_train), open("random_cancer.p", "wb"))
+        if save_file:
+            pickle.dump((X_train, y_train), open("train_data.p", "wb"))
+            pickle.dump((X_test, y_test), open("test_data.p", "wb"))
         n = len(X_train)
 
         if not partial_:
