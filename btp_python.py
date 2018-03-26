@@ -542,18 +542,19 @@ class SVM_Online:
             # ------ REMOVE THIS
             break
 
-        # # DEBUG
-        # if n >0:
-        #   print("n: ", n)
-        #   print("MArg: ", self.Margin_v)
-        #   print("Err: ", self.Error_v)
-        #   print("Remain: ", self.Remain_v)
-        #   print("G: ", self.g_all)
-        #   print("ALL ALPHA: ", self.alpha_all)
-        #   print("gamma_: ", gamma_)
-        #   print("TRANS: ", transition_alpha)
-        #   print("VECS: ", transition_vectors)
-        #   input()
+        # DEBUG
+        if n >0:
+          print("n: ", n)
+          print("MArg: ", self.Margin_v)
+          print("Err: ", self.Error_v)
+          print("Remain: ", self.Remain_v)
+          print("G: ", self.g_all)
+          print("ALL ALPHA: ", self.alpha_all)
+          print("gamma_: ", gamma_)
+          print("TRANS: ", transition_alpha)
+          print("VECS: ", transition_vectors)
+          print("R: ", self.R_)
+          input()
 
         # print(transition_vectors)
           # --------TO DO---------------------

@@ -6,8 +6,8 @@ from collections import namedtuple
 # config=tf.ConfigProto(log_device_placement=True)
 with tf.device("/cpu:0"):
     with tf.Session() as sess:
-        i = tf.constant([1,2,3])
-        j = tf.constant([1,4, 3])
-        z = tf.cast(tf.equal(i,j), tf.int32)
-        print(sess.run(z))
+        i = tf.constant(1., dtype=tf.float64)
+        j = tf.constant(2., dtype=tf.float64)
+        z = i*j
+        print(sess.run([z]))
 

@@ -10,15 +10,15 @@ from sklearn.metrics import accuracy_score
 from sklearn.model_selection import KFold
 
 from data_loader import extract_data
-from var_free_graph import simple_kernel, svm_train, svm_eval, create_svm_variables
+from svm_graph64 import simple_kernel, svm_train, svm_eval, create_svm_variables
 
 
-C_SVM = 5.
+C_SVM = 1.
 RESERVE_THRESHOLD = float("Inf")
 
 model_params = {
   "C" : C_SVM,
-  "eps" : RESERVE_THRESHOLD,
+  "threshold" : RESERVE_THRESHOLD,
   "kernel" : simple_kernel,
   }
 
@@ -58,7 +58,7 @@ def compare(X, y, partial_=True, save_file=False):
         n = len(X_train)
         print("Starting standard training", partial_)
         if not partial_:
-            clf = svm.SVC(kernel="linear", shrinking=False)
+            clf = svm.SVC(kernel="linear", shrinking=False, C=C_SVM)
             t1 = time.time()
             clf.fit(X_train, y_train)
             time_std += time.time()-t1
@@ -83,11 +83,12 @@ def compare(X, y, partial_=True, save_file=False):
         # Check performance of  my model
         # make labels -1, 1
         y_train = y_train*2 - 1
-        y_test = y_test * 2 - 1
+        y_test = y_test*2 - 1
         with tf.device("/cpu:0"):
           time_mine,_ = svm_train(X_train, y_train, model_params, restart=True)
-          acc_mine = svm_eval(X_test, y_test, model_params)
-        # print("ACC MINE: ", acc_mine)
+          my_pred = svm_eval(X_test, model_params)
+          acc_mine = accuracy_score(my_pred, y_test)
+        # print("ACC MINE: ", accuracy_score(my_pred, y_test))
         # print("TIME MINE: ", time_mine)
         break
 
@@ -133,7 +134,7 @@ if len(y_uniq) != 2:
                 y2[j] = 0
             else:
                 y2[j] = 1
-        compare(X, y2, partial_=True)
+        compare(X, y2, partial_=False, save_file=True)
 
 else:
     compare(X, y, partial_=False, save_file=True)

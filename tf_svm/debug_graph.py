@@ -3,33 +3,29 @@ import pickle
 import numpy as np
 import tensorflow as tf
 
-from var_free_graph import simple_kernel, svm_train, svm_eval, create_all_vars
+from svm_graph64 import simple_kernel, svm_train, svm_eval, create_svm_variables
 
 
 
-C_SVM = 5.
-RESERVE_THRESHOLD = 5.
+C_SVM = 1.
+RESERVE_THRESHOLD = 5000.
 
 model_params = {
   "C" : C_SVM,
-  "eps" : RESERVE_THRESHOLD,
+  "threshold" : RESERVE_THRESHOLD,
   "kernel" : simple_kernel,
   }
 
-X_train, y_train = pickle.load(open("random_cancer.p", "rb"))
+X_train, y_train = pickle.load(open("problem_cancer1.p", "rb"))
+X_test, y_test = pickle.load(open("test_data_0.p", "rb"))
+y_train = y_train*2-1
+y_test = y_test*2-1
 with tf.device("/cpu:0"):
-    _, all_vars = svm_train(X_train, y_train, model_params)
-    # saver = tf.train.Saver()
-    # with tf.Session() as sess:
-    #   if tf.train.get_checkpoint_state('./svm_model/'):
-    #     # Restore previous model and continue training
-    #     ckpt = tf.train.latest_checkpoint('./svm_model/')
-    #     saver.restore(sess, ckpt)
-    #     with tf.variable_scope("svm_model", reuse=True):
-    #       # n = tf.get_variable("n", dtype=tf.int32)
-    #       # b = tf.get_variable("b")
-    #       # marg_vec_x = tf.get_variable("marg_vec_x")
-    #       all_vars = create_all_vars(model_params)
-    #   req = sess.run(all_vars)
+  _ = create_svm_variables(X_train.shape[1])  
+  _, all_vars = svm_train(X_train, y_train, model_params)
+  pred_y = svm_eval(X_test, model_params)
+  print(pred_y)
+  # print(acc)
+  from sklearn.metrics import accuracy_score
+  print("ACCURACY: ", accuracy_score(pred_y, y_test))
 
-# print(all_vars.marg_vec_x.shape, all_vars.err_vec_x.shape, all_vars.rem_vec_x.shape)

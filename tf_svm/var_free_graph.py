@@ -16,7 +16,7 @@ from data_loader import extract_data
 path_ = os.path.join("log_graph")
 
 INF = 10**12 + 0.
-eps_cor = 2*(10**-6)/5.
+# eps_cor = 2*(10**-6)/5.
 # Simple dot product - returns a rank 0 tensor/scalar
 def simple_kernel(x1, x2):
   return tf.tensordot(x1, x2, [0,0])
@@ -43,7 +43,7 @@ def calc_g(params, all_vars):
   return (calc_f(params, all_vars.x_c, all_vars) * all_vars.y_c 
     - 1.)
 
-def free_add_to_marg(kernel_fn, alpha_c, x_c, y_c, all_vars):
+def free_add_to_marg(params, alpha_c, x_c, y_c, all_vars):
   # print_op = tf.Print(tf.constant(1.), [], "Inside free add")
   # with tf.control_dependencies([print_op]):
   Q_s_ = all_vars.Q_s
@@ -51,13 +51,14 @@ def free_add_to_marg(kernel_fn, alpha_c, x_c, y_c, all_vars):
   marg_vec_y_ = all_vars.marg_vec_y
   alpha_marg_ = all_vars.alpha_marg
   # Update Q_s by adding new row and column in the end
-  q_cc = y_c*y_c*kernel_fn(x_c, x_c)
-  Q_marg_c = get_Q_vec(kernel_fn, x_c, y_c, marg_vec_x_, marg_vec_y_)
+  q_cc = get_Q_vec(params, x_c, y_c, tf.reshape(x_c, [1, -1]),
+    tf.reshape(y_c, [1, ]))
+  Q_marg_c = get_Q_vec(params, x_c, y_c, marg_vec_x_, marg_vec_y_)
   Q_marg_c = tf.concat([tf.reshape(y_c, [1,]), Q_marg_c], 0)
   # Concat new row
   Q_s_ = tf.concat([Q_s_, tf.reshape(Q_marg_c, [1, -1])], 0)
   # Concat new column after adding q_cc
-  Q_marg_c = tf.concat([Q_marg_c, tf.reshape(q_cc, [1,])], 0)
+  Q_marg_c = tf.concat([Q_marg_c, q_cc], 0)
   Q_s_ = tf.concat([Q_s_, tf.reshape(Q_marg_c, [-1, 1])], 1)
 
   # print_op = tf.Print(tf.constant(1), [x_c, y_c, all_vars.Q_s, Q_s_],
@@ -71,7 +72,7 @@ def free_add_to_marg(kernel_fn, alpha_c, x_c, y_c, all_vars):
   return all_vars._replace(Q_s=Q_s_, marg_vec_x=marg_vec_x_,
     marg_vec_y=marg_vec_y_, alpha_marg=alpha_marg_)
 
-def add_to_marg(kernel_fn, alpha_c, x_c, y_c, beta_c, gamma_c,
+def add_to_marg(params, alpha_c, x_c, y_c, beta_c, gamma_c,
  is_cur_c, all_vars):
   Q_ = all_vars.Q_s
   R_ = all_vars.R
@@ -82,18 +83,18 @@ def add_to_marg(kernel_fn, alpha_c, x_c, y_c, beta_c, gamma_c,
   beta_c = tf.cond(
     # Check of beta_c is scalar, then recalc
     tf.equal(is_cur_c, 0.),
-    lambda: get_beta(kernel_fn, x_c, y_c, all_vars),
+    lambda: get_beta(params, x_c, y_c, all_vars),
     lambda: beta_c)
 
   gamma_c = tf.cond(
     tf.equal(is_cur_c, 0.),
-    lambda: get_gamma(kernel_fn, x_c, y_c, tf.reshape(x_c, [1, -1]),
+    lambda: get_gamma(params, x_c, y_c, tf.reshape(x_c, [1, -1]),
       tf.reshape(y_c, [1,]), beta_c, all_vars)[0],
     lambda: gamma_c)
   # author's code correction
   gamma_c = tf.cond(
-    tf.less(gamma_c, eps_cor),
-    lambda: eps_cor,
+    tf.less(gamma_c, params["cor_eps"]),
+    lambda: params["cor_eps"],
     lambda: gamma_c)
   beta_c = tf.concat([beta_c, tf.constant([1.])], 0)
   # calculate beta_c' * beta_c
@@ -106,8 +107,8 @@ def add_to_marg(kernel_fn, alpha_c, x_c, y_c, beta_c, gamma_c,
   R_ = tf.pad(R_, pad_R, "CONSTANT")
   R_ = R_ + beta_mat
   # Similarly calculate Q
-  q_marg_c = get_Q_vec(kernel_fn, x_c, y_c, marg_vec_x_, marg_vec_y_)
-  q_cc = get_Q_vec(kernel_fn, x_c, y_c, tf.reshape(x_c, [1, -1]),
+  q_marg_c = get_Q_vec(params, x_c, y_c, marg_vec_x_, marg_vec_y_)
+  q_cc = get_Q_vec(params, x_c, y_c, tf.reshape(x_c, [1, -1]),
       tf.reshape(y_c, [1,]))
   q_marg_c = tf.concat([tf.reshape(y_c, [1, ]), q_marg_c, q_cc], 0)
   # add new row and column to Q_
@@ -131,12 +132,12 @@ def add_to_err(g_c, x_c, y_c, all_vars):
   return all_vars._replace(err_vec_x=err_vec_x_, err_vec_y=err_vec_y_,
     g_err=g_err_)
 
-def add_to_rem(eps, g_c, x_c, y_c, all_vars):
+def add_to_rem(threshold, g_c, x_c, y_c, all_vars):
   rem_vec_x_ = tf.concat([all_vars.rem_vec_x, tf.reshape(x_c, [1, -1])], 0)
   rem_vec_y_ = tf.concat([all_vars.rem_vec_y, tf.reshape(y_c, [1,])], 0)
   g_rem_ = tf.concat([all_vars.g_rem, tf.reshape(g_c, [1,])], 0)
 
-  return tf.cond(tf.less(g_c, eps),
+  return tf.cond(tf.less(g_c, threshold),
     lambda: all_vars._replace(rem_vec_x=rem_vec_x_, rem_vec_y=rem_vec_y_,
       g_rem=g_rem_),
     lambda: all_vars)
@@ -150,15 +151,16 @@ def termn_condn(C_svm, all_vars):
     tf.equal(all_vars.alpha_c, C_svm))
 
 # This can be cached - not for Tensorflow though
-def get_Q_vec(kernel_fn, x_c, y_c, vec_x, vec_y):
+def get_Q_vec(params, x_c, y_c, vec_x, vec_y):
   # Calculate Q = y1*y2*K(x1*x2)
+  kernel_fn = params["kernel"]
   q_tens = tf.map_fn(lambda x: kernel_fn(x_c, x), vec_x)
   q_tens = q_tens * y_c
   q_tens = q_tens * vec_y
-  return q_tens + eps_cor
+  return q_tens + params["cor_eps"]
 
-def get_beta(kernel_fn, x_c, y_c, all_vars):
-  q_tens = get_Q_vec(kernel_fn, x_c, y_c, all_vars.marg_vec_x,
+def get_beta(params, x_c, y_c, all_vars):
+  q_tens = get_Q_vec(params, x_c, y_c, all_vars.marg_vec_x,
     all_vars.marg_vec_y)
   # Concat y_c in the starting
   q_tens = tf.concat([tf.reshape(y_c, [1,]), q_tens], 0)
@@ -168,13 +170,13 @@ def get_beta(kernel_fn, x_c, y_c, all_vars):
   # return reshaped beta
   return tf.reshape(beta, [-1,])
 
-def get_gamma(kernel_fn, x_c, y_c, vec_x, vec_y, beta, all_vars):
-  Q_i_c = get_Q_vec(kernel_fn, x_c, y_c, vec_x, vec_y)
+def get_gamma(params, x_c, y_c, vec_x, vec_y, beta, all_vars):
+  Q_i_c = get_Q_vec(params, x_c, y_c, vec_x, vec_y)
   # Gamma_i = Q_i_c + SUM(get_Q_vec(x_i, y_i, marg) Beta) + Beta[0]*y_i
   elems = (vec_x, vec_y)
   gamma_tens = tf.map_fn(
     lambda x: tf.tensordot(
-      get_Q_vec(kernel_fn, x[0], x[1], all_vars.marg_vec_x, all_vars.marg_vec_y),
+      get_Q_vec(params, x[0], x[1], all_vars.marg_vec_x, all_vars.marg_vec_y),
       beta[1:], [0,0]),
     elems, dtype=tf.float32)
   gamma_tens = gamma_tens + (beta[0] * vec_y)
@@ -228,7 +230,7 @@ def update_val(min_alpha, beta, gamma_err, gamma_rem, gamma_c, all_vars):
   g_c_ = all_vars.g_c + gamma_c[0]*min_alpha
   return all_vars._replace(g_rem=g_rem_, g_err=g_err_, g_c=g_c_)
 
-def rem_from_marg(kernel_fn, min_marg_indx, all_vars):
+def rem_from_marg(min_marg_indx, all_vars):
   R_ = all_vars.R
   Q_ = all_vars.Q_s
   marg_vec_x_ = all_vars.marg_vec_x
@@ -286,7 +288,7 @@ def handle_rem(params, min_rem_indx, gamma_rem, all_vars):
   x_ = all_vars.rem_vec_x[min_rem_indx]
   y_ = all_vars.rem_vec_y[min_rem_indx]
   
-  all_vars = add_to_marg(params["kernel"], alpha_, x_, y_, tf.constant(-1.),
+  all_vars = add_to_marg(params, alpha_, x_, y_, tf.constant(-1.),
     tf.constant(-1.), tf.constant(0.), all_vars)
   return rem_from_rem(min_rem_indx, all_vars)
 
@@ -296,7 +298,7 @@ def handle_err(params, min_err_indx, gamma_err, all_vars):
   x_ = all_vars.err_vec_x[min_err_indx]
   y_ = all_vars.err_vec_y[min_err_indx]
   
-  all_vars = add_to_marg(params["kernel"], alpha_, x_, y_, tf.constant(-1.),
+  all_vars = add_to_marg(params, alpha_, x_, y_, tf.constant(-1.),
     tf.constant(-1.), tf.constant(0.), all_vars)
   return rem_from_err(min_err_indx, all_vars)
 
@@ -309,7 +311,7 @@ def handle_marg(params, min_marg_indx, beta, all_vars):
     lambda: add_to_rem(params["eps"], g_, x_, y_, all_vars),
     lambda: add_to_err(g_, x_, y_, all_vars))
 
-  return rem_from_marg(params["kernel"], min_marg_indx, all_vars)
+  return rem_from_marg(min_marg_indx, all_vars)
 
 def handle_empty_rem(params, min_rem_indx, all_vars):
   # Add the vector to marg support
@@ -317,7 +319,7 @@ def handle_empty_rem(params, min_rem_indx, all_vars):
   x_ = all_vars.rem_vec_x[min_rem_indx]
   y_ = all_vars.rem_vec_y[min_rem_indx]
   
-  all_vars = free_add_to_marg(params["kernel"], alpha_, x_, y_, all_vars)
+  all_vars = free_add_to_marg(params, alpha_, x_, y_, all_vars)
   return rem_from_rem(min_rem_indx, all_vars)
 
 def handle_empty_err(params, min_err_indx, all_vars):
@@ -326,7 +328,7 @@ def handle_empty_err(params, min_err_indx, all_vars):
   x_ = all_vars.err_vec_x[min_err_indx]
   y_ = all_vars.err_vec_y[min_err_indx]
   
-  all_vars = free_add_to_marg(params["kernel"], alpha_, x_, y_, all_vars)
+  all_vars = free_add_to_marg(params, alpha_, x_, y_, all_vars)
   return rem_from_err(min_err_indx, all_vars)
 
 def handle_empty_marg(params, all_vars):
@@ -402,7 +404,7 @@ def handle_empty_marg(params, all_vars):
   # Check if min is in trans_c
   all_vars = tf.cond(
     tf.equal(trans_c, abs_min_del_b),
-    lambda: free_add_to_marg(params["kernel"], all_vars.alpha_c,all_vars.x_c,
+    lambda: free_add_to_marg(params, all_vars.alpha_c,all_vars.x_c,
       all_vars.y_c, all_vars),
     lambda: all_vars)
   # update R as inverse of Q
@@ -413,13 +415,13 @@ def mini_iter(params, all_vars):
   # print_op = tf.Print(tf.constant(1.), [], "Inside mini iter")
   # Calculate beta
   # with tf.control_dependencies([print_op]):
-  beta = get_beta(params["kernel"], all_vars.x_c, all_vars.y_c, all_vars)
+  beta = get_beta(params, all_vars.x_c, all_vars.y_c, all_vars)
   # Calculate gamma
-  gamma_err = get_gamma(params["kernel"], all_vars.x_c, all_vars.y_c,
+  gamma_err = get_gamma(params, all_vars.x_c, all_vars.y_c,
     all_vars.err_vec_x, all_vars.err_vec_y, beta, all_vars)
-  gamma_rem = get_gamma(params["kernel"], all_vars.x_c, all_vars.y_c,
+  gamma_rem = get_gamma(params, all_vars.x_c, all_vars.y_c,
     all_vars.rem_vec_x, all_vars.rem_vec_y, beta, all_vars)
-  gamma_c = get_gamma(params["kernel"], all_vars.x_c, all_vars.y_c,
+  gamma_c = get_gamma(params, all_vars.x_c, all_vars.y_c,
     tf.reshape(all_vars.x_c, [1, -1]), tf.reshape(all_vars.y_c, [1,]),
     beta, all_vars)
 
@@ -496,7 +498,7 @@ def mini_iter(params, all_vars):
     termn_condn(params["C"], all_vars),
     lambda: tf.cond(
       tf.equal(all_vars.g_c, 0.),
-      lambda: add_to_marg(params["kernel"], all_vars.alpha_c, all_vars.x_c,
+      lambda: add_to_marg(params, all_vars.alpha_c, all_vars.x_c,
         all_vars.y_c, beta, gamma_c[0], tf.constant(1.), all_vars),
       lambda: add_to_err(all_vars.g_c, all_vars.x_c, all_vars.y_c, all_vars)),
     lambda: all_vars)
@@ -559,9 +561,9 @@ def _train(x_, y_, params, all_vars):
   # g_c_ = 1.
   all_vars = all_vars._replace(g_c=g_c_)
   # condition on the value of g
-  return tf.cond(tf.greater(g_c_, 0),
-    lambda: add_to_rem(params["eps"], g_c_, x_, y_, all_vars),
+  return tf.cond(tf.less(g_c_, 0),
     lambda: fit_point(params, all_vars),
+    lambda: add_to_rem(params["threshold"], g_c_, x_, y_, all_vars),
     )
 
 def _predict(params, x_c, all_vars):
@@ -701,7 +703,8 @@ def svm_train(x_train, y_train, model_params, restart=True, save_model=True):
   print("SHAPE: ", x_train.shape[1])
   # make these command line args
   model_params["shape"] = x_train.shape[1]
-
+  # add the eps correction term from author;s code
+  model_params["cor_eps"] = 2*(10**-6)/model_params["C"]
   # Placeholders for inputs
   x_ = tf.placeholder(tf.float32, shape=(x_train.shape[1]))
   y_ = tf.placeholder(tf.float32, shape=())
@@ -774,7 +777,7 @@ def svm_train(x_train, y_train, model_params, restart=True, save_model=True):
 
 if __name__ == "__main__":
   x_all, y_all = extract_data("data_1.csv", "csv")
-  params = {"C": 5., "eps": float("Inf"), "kernel":simple_kernel}
+  params = {"C": 5., "threshold": float("Inf"), "kernel":simple_kernel}
   with tf.device("/cpu:0"):
     svm_train(x_all, y_all, params)
     # print(svm_eval(x_all[800:], y_all[800:], params, standalone=True))
