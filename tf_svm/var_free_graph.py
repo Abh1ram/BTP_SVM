@@ -23,7 +23,7 @@ def simple_kernel(x1, x2):
 
 def stabilize_R(R_, Q_):
   R_tr = tf.transpose(R_)
-  return R_ + R_tr - tf.matmul(R_, tf.matmul(Q_, R_tr))
+  return R_ + R_tr - tf.matmul(tf.matmul(R_, Q_), R_tr)
 
 # Calc f(x) = SUM (alpha_j * y_j * kernel(x_j, x)) for j in support vectors - marg, err
 def calc_f(params, x_c, all_vars):

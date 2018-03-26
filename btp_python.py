@@ -46,8 +46,6 @@ def kernel(x1, x2):
   return np.dot(x1, x2)
 
 # @cache this
-def calc_Q(x1, y1, x2, y2):
-  return np.array(y1*y2*kernel(x1, x2)) + eps2
   # .astype(np.float32) + eps
 
 
@@ -93,6 +91,13 @@ class SVM_Online:
     self.reserve_threshold = reserve_threshold
     # DEBUG purpose - iteeration count
     self.tot_iter = 0
+    # NUMERIC INSTABILITY CORRECTION
+    self.cor_eps = 2*(10**-6)/self.C_svm
+    # print(self.cor_eps)
+    # input()
+
+  def calc_Q(self, x1, y1, x2, y2):
+    return np.array(y1*y2*kernel(x1, x2)) + self.cor_eps
 
   def add_point(self, x_c, y_c):
     self.y_all.append(y_c)
@@ -136,43 +141,38 @@ class SVM_Online:
       return -1
 
   def add_support_R(self, elem_index):
-    # print("Adding...")
-    # eps = 2*(10**-6)/self.C_svm
     x_c = self.get_x(elem_index)
     y_c = self.y_all[elem_index]
 
-    beta_calc = np.zeros((len(self.Margin_v)+1, 1))
-    beta_calc[0][0] = y_c
+    Q_cs = np.zeros((len(self.Margin_v)+1, 1))
+    Q_cs[0][0] = y_c
     for i in range(len(self.Margin_v)):
       indx = self.Margin_v[i]
-      beta_calc[i+1][0] = calc_Q(self.get_x(indx), self.y_all[indx], x_c, y_c)
+      Q_cs[i+1][0] = self.calc_Q(self.get_x(indx), self.y_all[indx], x_c, y_c)
 
-    # print("Addiing support: ", np.dot(-1*self.R_, beta_calc))
-    # print(self.Q_, beta_calc)
-    beta_calc = np.append(beta_calc, [[calc_Q(x_c, y_c, x_c, y_c)]], axis=0)
-    # beta_calc += eps
-    # print(self.Q_, beta_calc)
-    Q_temp = np.concatenate( (self.Q_, beta_calc.transpose()[:,:-1]), axis=0)
-    self.Q_ = np.concatenate( (Q_temp, beta_calc), axis=1)
+    Q_cs = np.append(Q_cs, [[self.calc_Q(x_c, y_c, x_c, y_c)]], axis=0)
+    # Updating Q
+    Q_temp = np.concatenate( (self.Q_, Q_cs.transpose()[:,:-1]), axis=0)
+    self.Q_ = np.concatenate( (Q_temp, Q_cs), axis=1)
     # To calculate R:
     if len(self.Margin_v) == 0:
       # print("HREH")
       self.R_ = np.linalg.inv(self.Q_)
     else:
       R_ = self.R_
-      beta_calc = beta_calc[:-1, :]
-      beta = np.dot(-1*R_, beta_calc)
+      Q_cs = Q_cs[:-1, :]
+      beta = np.dot(-1*R_, Q_cs)
 
       # calc pivot/gamma
-      gamma_c = beta[0][0] * y_c + calc_Q(x_c, y_c, x_c, y_c)
+      gamma_c = beta[0][0] * y_c + self.calc_Q(x_c, y_c, x_c, y_c)
       for i in range(len(self.Margin_v)):
         indx = self.Margin_v[i]
-        gamma_c += calc_Q(self.get_x(indx), self.y_all[indx], x_c, y_c)*beta[i+1][0]
+        gamma_c += self.calc_Q(self.get_x(indx), self.y_all[indx], x_c, y_c)*beta[i+1][0]
       # pivot check
       
-      if gamma_c < eps2:
-        print("Does this even happen: ", gamma_c)
-        gamma_c = eps2
+      if gamma_c < self.cor_eps:
+        print("Training error: ", gamma_c)
+        gamma_c = self.cor_eps
       # Calc R
       beta = np.append(beta, [[1.]], axis=0)
       n = self.R_.shape[0]
@@ -189,6 +189,7 @@ class SVM_Online:
     R_mat = self.R_
     k = self.Margin_v.index(elem_index) + 1
     if R_mat[k][k] == 0:
+      # print("Training error - R_kk is zero")
       R_mat[k][k] = 10**-8
     if R_mat[k][k] != 0:
       for i in range((R_mat.shape[0])):
@@ -215,16 +216,7 @@ class SVM_Online:
     # .astype(np.float32)
     R_tr = R_.transpose()
     self.R_ = R_ + R_tr - np.dot(np.dot(R_, Q_), R_tr)
-    # print("MARG: ", len(self.Margin_v), "\nERR: ", len(self.Error_v))
-    # print("N: ", self.n-1)
-    # print("-----------------------------")
-    # print(self.R_)
-    # # if (Q_.shape[0] != 1):
-    # #   self.R_ = np.linalg.inv(Q_) 
-    # #   print(np.linalg.inv(Q_))
-    # input()
-    # print("-----------------")
-    
+
 
   def calc_g(self, x_c, y_c):
     # f(x) = (Sum alpha_j*y_j*kernel(x_c, x_j)) + b
@@ -234,18 +226,18 @@ class SVM_Online:
 
   def get_beta_gamma(self, x_c, y_c):
     n = self.n
-    beta_calc = np.zeros((len(self.Margin_v)+1, 1))
-    beta_calc[0][0] = y_c
+    Q_cs = np.zeros((len(self.Margin_v)+1, 1))
+    Q_cs[0][0] = y_c
     # -------- TO DO ---------------
     # To make this vector operation
     for i in range(len(self.Margin_v)):
       indx = self.Margin_v[i]
-      beta_calc[i+1][0] = calc_Q(self.get_x(indx), self.y_all[indx], x_c, y_c)
+      Q_cs[i+1][0] = self.calc_Q(self.get_x(indx), self.y_all[indx], x_c, y_c)
 
     if self.R_.shape[0] == 1:
       self.R_[0][0] = -INF
     
-    beta_sup = np.dot(-1*(self.R_), beta_calc)
+    beta_sup = np.dot(-1*(self.R_), Q_cs)
 
     beta_ = [0 for i in range(n)]
     # for Margin support vectors
@@ -257,11 +249,11 @@ class SVM_Online:
     gamma_ = [0 for i in range(n)]
     for i in range(n):
       if i not in self.Margin_v:
-        gamma_[i] = calc_Q(self.get_x(i), self.y_all[i], x_c, y_c)
+        gamma_[i] = self.calc_Q(self.get_x(i), self.y_all[i], x_c, y_c)
         gamma_[i] += beta_sup[0][0]*(self.y_all[i])
 
         for j, indx in enumerate(self.Margin_v):
-          gamma_[i] += (beta_sup[j+1][0] * calc_Q(
+          gamma_[i] += (beta_sup[j+1][0] * self.calc_Q(
             self.get_x(indx), self.y_all[indx], self.get_x(i), self.y_all[i]))
 
     return beta_, gamma_, beta_sup 
@@ -295,11 +287,11 @@ class SVM_Online:
     else:
       num_pts = len(self.x_all)
     for ii in range(num_pts):
-      if ii%100 == 0:
+      if (ii+1)%200 == 0:
         print("AT: ", ii)
         print("Margin_v: ", len(self.Margin_v))
         print("Iterations: ", self.tot_iter)
-      self.learn(self.get_x(ii), self.y_all[ii])
+      self.__learn(self.get_x(ii), self.y_all[ii])
 
     print("Time taken: ", time()-t1)
     # print("----------------------DONE---------------------------")
@@ -478,7 +470,7 @@ class SVM_Online:
         self.Error_v.remove(indx)
 
 # Not to be called directly
-  def learn(self, x_c, y_c):
+  def __learn(self, x_c, y_c):
     # Assumption: the point has already been added
     self.n += 1
     n = self.n

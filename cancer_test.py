@@ -4,10 +4,11 @@ import sys
 import time
 
 from sklearn import svm, datasets, linear_model
+from sklearn.metrics import accuracy_score
 from sklearn.model_selection import KFold
 from btp_python import SVM_Online
 
-def compare(X, y, partial_=True, save_file=False):
+def compare(X, y, partial_=True, save_file=False, C=1.):
     # print(y.reshape(-1, 1)[:5,:])
     big = np.append(X, y.reshape(-1,1), axis=1)
 
@@ -18,13 +19,6 @@ def compare(X, y, partial_=True, save_file=False):
 
     X = big[:, :-1]
     y = big[:, -1]
-
-    # n = round(X.shape[0]*0.7)    
-    # print("Train size: ", n)
-    # X_train = X[:n]
-    # y_train = y[:n]
-    # X_test = X[n:]
-    # y_test = y[n:]
     
     # Applying k fold cross validation
     kf = KFold(n_splits=5)
@@ -41,7 +35,7 @@ def compare(X, y, partial_=True, save_file=False):
         n = len(X_train)
 
         if not partial_:
-            clf = svm.SVC(kernel="linear", shrinking=False)
+            clf = svm.SVC(kernel="linear", shrinking=False, C=C)
             t1 = time.time()
             # clf.fit(X, y)
             clf.fit(X_train, y_train)
@@ -49,9 +43,9 @@ def compare(X, y, partial_=True, save_file=False):
             print("TIme taken for svc: ", time.time()-t1)
         # mesh_plot(X_train, y_train, clf)
 
-            print((clf.support_))
-            print("Length: ")
-            print(len(clf.support_))
+            # print((clf.support_))
+            # print("Length: ")
+            # print(len(clf.support_))
         else:
             # alpha = 1/X_train.shape[0]
             clf = linear_model.SGDClassifier()
@@ -65,15 +59,12 @@ def compare(X, y, partial_=True, save_file=False):
 
         cor = 0
         pred = clf.predict(X_test)
-        for i in range(pred.shape[0]):
-            if pred[i] == y_test[i]:
-                cor += 1
-        print("Accuracy of svc: ", cor/X_test.shape[0])
-        acc_std += cor/X_test.shape[0]
 
-        # mysvm = SVM_Online(X=X, y=y*2-1,C_svm=1)
+        acc_std_iter = accuracy_score(pred, y_test)
+        print("Accuracy of svc: ", acc_std_iter)
+        acc_std += acc_std_iter
 
-        mysvm = SVM_Online(X=X_train, y=y_train*2-1,C_svm=1)
+        mysvm = SVM_Online(X=X_train, y=y_train*2-1,C_svm=C)
         t1 = time.time()
         mysvm.train_all()
         time_mine += time.time() - t1
@@ -81,35 +72,25 @@ def compare(X, y, partial_=True, save_file=False):
         # mysvm.dec_bdry(12, 17)
 
         pos, neg = [],[]
-        print()
-        for x in sorted(mysvm.Margin_v+mysvm.Error_v):
-            if mysvm.y_all[x] == 1:
-                pos.append(x)
-            else:
-                neg.append(x)
+        # print()
+        # for x in sorted(mysvm.Margin_v+mysvm.Error_v):
+        #     if mysvm.y_all[x] == 1:
+        #         pos.append(x)
+        #     else:
+        #         neg.append(x)
 
-        print(pos, neg)
+        # print(pos, neg)
 
-        cor = 0
-        mismatch = 0
-        for i in range(X_test.shape[0]):
-            if mysvm.predict(X_test[i]) == (y_test[i]*2-1):
-                cor += 1
-            if mysvm.predict(X_test[i]) != (pred[i]*2-1):
-                mismatch += 1
+        pred_mine = []
+        for x in X_test:
+            pred_mine.append(mysvm.predict(x))
+        acc_mine_iter = accuracy_score(pred_mine, y_test*2-1)
+        print("My acc: ", acc_mine_iter)
+        acc_mine += acc_mine_iter
+        # break
+        print("-------------SPLIT DONE----------------------\n")
 
-        # Testing on training data
-        # pred = clf.predict(X_train)
-        # for i in range(X_train.shape[0]):
-        #     if mysvm.predict(X_train[i]) != (pred[i]*2-1):
-        #         mismatch += 1
-
-        # print("Mismatch: ", mismatch)
-        # print("Accuraccy: ", cor/(tot_pts-n))
-        acc_mine += cor/X_test.shape[0]
-        break
-
-    num_splits = 1
+    num_splits = 5
     print("\n\n-----------------------------")
     print("Acc std: ", acc_std/num_splits)
     print("Acc mine: ", acc_mine/num_splits)
@@ -133,6 +114,7 @@ y_uniq = np.unique(y)
 print(y_uniq)
 input()
 
+C_SVM = 1.
 
 # convert multi-class to two classes
 if len(y_uniq) != 2:
@@ -140,14 +122,14 @@ if len(y_uniq) != 2:
     for i in range(y_uniq.shape[0]):
         print()
         print("-----------------------------------")
-        print(i)
+        print("CLASS:", i, "\n")
         y2 = np.zeros(y.shape[0])
         for j in range(y.shape[0]):
             if y[j] == i:
                 y2[j] = 0
             else:
                 y2[j] = 1
-        compare(X, y2, partial_=False)
+        compare(X, y2, partial_=False, C=C_SVM)
 
 else:
-    compare(X, y, partial_=False)
+    compare(X, y, partial_=False, C=C_SVM)

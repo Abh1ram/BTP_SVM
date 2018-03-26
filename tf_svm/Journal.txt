@@ -5,7 +5,12 @@ Design decisions:
 
 PROBLEMS:
 1. MORE??????? - the precision and calculations have become too sensitive
-and are easily going crazy
+and are easily going crazy - ***NUMERIC INSTABILITY***
+ CORRECTIONS:
+ 1. Add cor = 2*10**-6/C for each kernel calculation
+ 2. Add cor check for gamma of data point entering marg
+ 3. Add correction to R
+
 
 
 -----------------------
@@ -44,6 +49,12 @@ MORE NOTES:
 
 COMPLETE CV
 -----------------------------------------------------
+24-03
+1. Clean up the btp_python code
+2. Test the same changes for tf - first float32 and then float64
+    CHECK if there is a global setting to make default type of tf as f64
+3. Possibly add indices as one of the variables
+
 22-03
 1. My code fails with certain test cases - singular matrix, infinite loop
 2. The author's code seems to work for these data
