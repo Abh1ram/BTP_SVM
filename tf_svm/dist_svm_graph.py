@@ -12,6 +12,7 @@ import tensorflow as tf
 from collections import namedtuple
 
 from data_loader import extract_data
+from dist_config import cluster, master_worker_rpc
 
 path_ = os.path.join("log_graph")
 
@@ -116,20 +117,24 @@ def add_to_marg(params, alpha_c, x_c, y_c, beta_c, gamma_c,
   pad_R = tf.constant([[0, 1], [0, 1]])
   R_ = tf.pad(R_, pad_R, "CONSTANT")
   R_ = R_ + beta_mat
-  # Similarly calculate Q
-  q_marg_c = get_Q_vec(params, x_c, y_c, marg_vec_x_, marg_vec_y_)
-  q_cc = get_Q_vec(params, x_c, y_c, tf.reshape(x_c, [1, -1]),
-      tf.reshape(y_c, [1,]))
-  q_marg_c = tf.concat([tf.reshape(y_c, [1, ]), q_marg_c, q_cc], 0)
-  # add new row and column to Q_
-  Q_ = tf.concat([Q_, tf.reshape(q_marg_c[:-1], [1, -1])], 0)
-  Q_ = tf.concat([Q_, tf.reshape(q_marg_c, [-1, 1])], 1)
-  # stabiilize R
+
+  with tf.device("/job:worker/task:1"):
+    # Similarly calculate Q
+    q_marg_c = get_Q_vec(params, x_c, y_c, marg_vec_x_, marg_vec_y_)
+    q_cc = get_Q_vec(params, x_c, y_c, tf.reshape(x_c, [1, -1]),
+        tf.reshape(y_c, [1,]))
+    q_marg_c = tf.concat([tf.reshape(y_c, [1, ]), q_marg_c, q_cc], 0)
+    # add new row and column to Q_
+    Q_ = tf.concat([Q_, tf.reshape(q_marg_c[:-1], [1, -1])], 0)
+    Q_ = tf.concat([Q_, tf.reshape(q_marg_c, [-1, 1])], 1)
+
+    # add x_c, y_c and alpha to marg_vec_x marg_vc_y and alpha_marg
+    marg_vec_x_ = tf.concat([marg_vec_x_, tf.reshape(x_c, [1, -1])], 0)
+    marg_vec_y_ = tf.concat([marg_vec_y_, tf.reshape(y_c, [1,])], 0)
+    alpha_marg_ = tf.concat([alpha_marg_, tf.reshape(alpha_c, [1,])], 0)
+
+  # stabilize R
   R_ = stabilize_R(R_, Q_)
-  # add x_c, y_c and alpha to marg_vec_x marg_vc_y and alpha_marg
-  marg_vec_x_ = tf.concat([marg_vec_x_, tf.reshape(x_c, [1, -1])], 0)
-  marg_vec_y_ = tf.concat([marg_vec_y_, tf.reshape(y_c, [1,])], 0)
-  alpha_marg_ = tf.concat([alpha_marg_, tf.reshape(alpha_c, [1,])], 0)
 
   return all_vars._replace(Q_s=Q_, R=R_, marg_vec_x=marg_vec_x_,
     marg_vec_y=marg_vec_y_, alpha_marg=alpha_marg_)
@@ -257,16 +262,19 @@ def rem_from_marg(min_marg_indx, all_vars):
   # drop kth row and column
   R_ = tf.concat([R_[:k, :], R_[k+1:, :]], 0)
   R_ = tf.concat([R_[:, :k], R_[:, k+1:]], 1)
-  # drop kth row and column for Q
-  Q_ = tf.concat([Q_[:k, :], Q_[k+1: , :]], 0)
-  Q_ = tf.concat([Q_[:, :k], Q_[:, k+1:]], 1)
+  
+  with tf.device("/job:worker/task:1"):
+    # drop kth row and column for Q
+    Q_ = tf.concat([Q_[:k, :], Q_[k+1: , :]], 0)
+    Q_ = tf.concat([Q_[:, :k], Q_[:, k+1:]], 1)
+    # drop min_mar_indx from marg_vec_x and y and alpha_marg
+    marg_vec_x_ = tf.concat([marg_vec_x_[:k-1], marg_vec_x_[k:]], 0)
+    marg_vec_y_ = tf.concat([marg_vec_y_[:k-1], marg_vec_y_[k:]], 0)
+    alpha_marg_ = tf.concat([alpha_marg_[:k-1], alpha_marg_[k:]], 0)
+
   # stabilize R
   R_ = stabilize_R(R_, Q_)
-  # drop min_mar_indx from marg_vec_x and y and alpha_marg
-  marg_vec_x_ = tf.concat([marg_vec_x_[:k-1], marg_vec_x_[k:]], 0)
-  marg_vec_y_ = tf.concat([marg_vec_y_[:k-1], marg_vec_y_[k:]], 0)
-  alpha_marg_ = tf.concat([alpha_marg_[:k-1], alpha_marg_[k:]], 0)
-
+  
   return all_vars._replace(Q_s=Q_, R=R_, marg_vec_x=marg_vec_x_,
     marg_vec_y=marg_vec_y_, alpha_marg=alpha_marg_)
 
@@ -429,27 +437,22 @@ def mini_iter(params, all_vars):
   # with tf.control_dependencies([print_op]):
   beta = get_beta(params, all_vars.x_c, all_vars.y_c, all_vars)
   # Calculate gamma
-  gamma_err = get_gamma(params, all_vars.x_c, all_vars.y_c,
-    all_vars.err_vec_x, all_vars.err_vec_y, beta, all_vars)
+  # this is done by master worker
   gamma_rem = get_gamma(params, all_vars.x_c, all_vars.y_c,
     all_vars.rem_vec_x, all_vars.rem_vec_y, beta, all_vars)
-  gamma_c = get_gamma(params, all_vars.x_c, all_vars.y_c,
-    tf.reshape(all_vars.x_c, [1, -1]), tf.reshape(all_vars.y_c, [1,]),
-    beta, all_vars)
+  # these two are done by second worker
+  with tf.device("/job:worker/task:1"):
+    gamma_err = get_gamma(params, all_vars.x_c, all_vars.y_c,
+      all_vars.err_vec_x, all_vars.err_vec_y, beta, all_vars)
+    gamma_c = get_gamma(params, all_vars.x_c, all_vars.y_c,
+      tf.reshape(all_vars.x_c, [1, -1]), tf.reshape(all_vars.y_c, [1,]),
+      beta, all_vars)
 
   # BOOK_KEEPING
   # For margin support vectors, if Beta_s > 0, alpha_c can go to C or 
   # if Beta_s < 0, alpha_s can go to 0, causing a transition in state
   trans_marg = get_trans_alpha_marg(params["C"],
     all_vars.alpha_marg, beta[1:])
-  # For error support vectors, if Gamma_i > 0, then g_i increases to 0
-  # and causes state change
-  elems = (all_vars.g_err, gamma_err)
-  trans_err = tf.map_fn(lambda x: tf.cond(
-    tf.greater(x[1], 0),
-    lambda: -1*x[0]/x[1],
-    lambda: tf.constant(float("Inf"), dtype=tf.float64)),
-  elems, dtype=tf.float64)
   # For the remaining vectors, if Gamma_i < 0, then g_i decreases to 0
   elems = (all_vars.g_rem, gamma_rem)
   trans_rem = tf.map_fn(lambda x: tf.cond(
@@ -457,12 +460,24 @@ def mini_iter(params, all_vars):
     lambda: -1*x[0]/x[1],
     lambda: tf.constant(float("Inf"), dtype=tf.float64)),
   elems, dtype=tf.float64)
-  # For candidate vector
-  candidate_trans = tf.minimum(
-      tf.cond(gamma_c[0] > 0,
-        lambda: -1*all_vars.g_c/gamma_c[0],
-        lambda: tf.constant(float("Inf"), dtype=tf.float64)),
-      params["C"] - all_vars.alpha_c)
+
+  # This is done by second worker
+  with tf.device("/job:worker/task:1"):
+    # For error support vectors, if Gamma_i > 0, then g_i increases to 0
+    # and causes state change
+    elems = (all_vars.g_err, gamma_err)
+    trans_err = tf.map_fn(lambda x: tf.cond(
+      tf.greater(x[1], 0),
+      lambda: -1*x[0]/x[1],
+      lambda: tf.constant(float("Inf"), dtype=tf.float64)),
+    elems, dtype=tf.float64)
+
+    # For candidate vector
+    candidate_trans = tf.minimum(
+        tf.cond(gamma_c[0] > 0,
+          lambda: -1*all_vars.g_c/gamma_c[0],
+          lambda: tf.constant(float("Inf"), dtype=tf.float64)),
+        params["C"] - all_vars.alpha_c)
 
   # Find the minimum transition alpha
   all_trans = tf.concat(
@@ -487,21 +502,23 @@ def mini_iter(params, all_vars):
     lambda: all_vars,
     name="Transition_marg")
 
-  # Check if min is in err sup vectors
-  min_err_indx = tf.cond(tf.equal(tf.shape(trans_err)[0], 0),
-    lambda: tf.constant(1),
-    lambda: check_min(trans_err, min_alpha),
-    )
+  with tf.device("/job:worker/task:1"):
+    # Check if min is in err sup vectors
+    min_err_indx = tf.cond(tf.equal(tf.shape(trans_err)[0], 0),
+      lambda: tf.constant(1),
+      lambda: check_min(trans_err, min_alpha),
+      )
   all_vars = tf.cond(
     tf.less(min_err_indx, tf.shape(trans_err)[0]),
     lambda: handle_err(params, min_err_indx, gamma_err, all_vars),
     lambda: all_vars)
 
-  # Check if min is in rem sup vectors
-  min_rem_indx = tf.cond(tf.equal(tf.shape(trans_rem)[0], 0),
-    lambda: tf.constant(1),
-    lambda: check_min(trans_rem, min_alpha),
-    )
+  with tf.device("/job:worker/task:1"):
+    # Check if min is in rem sup vectors
+    min_rem_indx = tf.cond(tf.equal(tf.shape(trans_rem)[0], 0),
+      lambda: tf.constant(1),
+      lambda: check_min(trans_rem, min_alpha),
+      )
   all_vars = tf.cond(
     tf.less(min_rem_indx, tf.shape(trans_rem)[0]),
     lambda: handle_rem(params, min_rem_indx, gamma_rem, all_vars),
@@ -638,7 +655,7 @@ def create_all_vars(params):
   return all_vars
 
 def create_svm_variables(x_shape):
-  with tf.variable_scope("svm_model") as scope:
+  with tf.variable_scope("dist_svm_model") as scope:
     # Variable creation
     # count of the number of data points seen
     n_ = tf.get_variable("n", initializer=tf.constant(0), trainable=False,
@@ -686,7 +703,7 @@ def create_svm_variables(x_shape):
     return scope
 
 def update_vars(all_vars):
-  with tf.variable_scope("svm_model", reuse=True):
+  with tf.variable_scope("dist_svm_model", reuse=True):
     op_list = []
     for field in set(all_vars._fields) - set(["x_c", "y_c", "alpha_c", "g_c", "n"]):
       op_list.append(tf.assign(tf.get_variable(field, dtype=tf.float64),
@@ -702,14 +719,14 @@ def svm_eval(x_test, model_params):
   print(model_params["shape"])
   # if standalone:
   #   scope = create_svm_variables(x_shape=model_params["shape"])
-  with tf.variable_scope("svm_model", reuse=True):
+  with tf.variable_scope("dist_svm_model", reuse=True):
     all_vars = create_all_vars(model_params)
 
   saver = tf.train.Saver()
   with tf.Session() as sess:
-    if tf.train.get_checkpoint_state('./svm_model/'):
+    if tf.train.get_checkpoint_state('./dist_svm_model/'):
       # Restore previous model and continue training
-      ckpt = tf.train.latest_checkpoint('./svm_model/')
+      ckpt = tf.train.latest_checkpoint('./dist_svm_model/')
       saver.restore(sess, ckpt)
       # Predict y based on the model for each x in test_x
       pred_y = tf.map_fn(lambda x: _predict(model_params, x, all_vars),
@@ -728,9 +745,9 @@ def svm_eval(x_test, model_params):
       print("No model found to evaluate")
       return None
 
-# svm_model_fn
+# dist_svm_model_fn
 # Return time taken to train
-def svm_train(x_train, y_train, model_params, restart=True, save_model=True):
+def dist_svm_train(x_train, y_train, model_params, restart=True, save_model=True):
   n = x_train.shape[0]
   print("SHAPE: ", x_train.shape[1])
   # make these command line args
@@ -744,24 +761,24 @@ def svm_train(x_train, y_train, model_params, restart=True, save_model=True):
   y_ = tf.placeholder(tf.float64, shape=())
 
   # Create namedtuple
-  # scope = create_svm_variables(x_shape=x_train.shape[1])
-  with tf.variable_scope("svm_model", reuse=True):
+  with tf.variable_scope("dist_svm_model", reuse=True):
     all_vars = create_all_vars(model_params)
 
   saver = tf.train.Saver()
   
   # TODO : Create variables to store model
-  with tf.Session() as sess:
-    if tf.train.get_checkpoint_state('./svm_model/') and not restart:
+  with tf.Session(master_worker_rpc,
+    config=tf.ConfigProto(log_device_placement=True)) as sess:
+    if tf.train.get_checkpoint_state('./dist_svm_model/') and not restart:
       # Restore previous model and continue training
-      ckpt = tf.train.latest_checkpoint('./svm_model/')
+      ckpt = tf.train.latest_checkpoint('./dist_svm_model/')
       saver.restore(sess, ckpt)
 
     else:
       sess.run(tf.global_variables_initializer())
-      # if directory ./svm_model/ exists model it to save new model to prevent
-      # mixing of models
-      if save_model and os.path.isdir('./svm_model'):
+      # if directory ./dist_svm_model/ exists move contents before saving
+      # new model to prevent mixing of models
+      if save_model and os.path.isdir('./dist_svm_model'):
         import shutil
         # create old_model if it doesn;t exist
         if not os.path.exists('./old_model/'):
@@ -774,13 +791,13 @@ def svm_train(x_train, y_train, model_params, restart=True, save_model=True):
               os.unlink(file_path)
           except Exception as e:
             print(e)
-        # Move files from ./svm_model to old_model
-        for f in os.listdir('./svm_model'):
-          shutil.move(os.path.join('./svm_model/', f), './old_model')
+        # Move files from ./dist_svm_model to old_model
+        for f in os.listdir('./dist_svm_model'):
+          shutil.move(os.path.join('./dist_svm_model/', f), './old_model')
 
-  
-    all_vars_upd = _train(x_, y_, model_params, all_vars)
-    upd_variables = update_vars(all_vars_upd)
+    with tf.device("/job:worker/task:0/cpu:0"):
+      all_vars_upd = _train(x_, y_, model_params, all_vars)
+      upd_variables = update_vars(all_vars_upd)
     # Check time taken
     print("Starting")
     t1 = time.time()
@@ -793,13 +810,13 @@ def svm_train(x_train, y_train, model_params, restart=True, save_model=True):
       # Make this once every k steps - for testing k =1
       # if (i%100 == 0):
       #   print("Saving")
-      #   save_path = saver.save(sess, "./svm_model/my_model", global_step=i)
+      #   save_path = saver.save(sess, "./dist_svm_model/my_model", global_step=i)
     time_taken = time.time() - t1
 
     # Save model in the end
     if save_model:
       print("Saving model...")
-      save_path = saver.save(sess, "./svm_model/my_model", global_step=i)
+      save_path = saver.save(sess, "./dist_svm_model/my_model", global_step=i)
     # Write graph to log file to show on TensorBoard
     # writer = tf.summary.FileWriter(path_, sess.graph)
     # writer.close()
@@ -812,7 +829,7 @@ def svm_train(x_train, y_train, model_params, restart=True, save_model=True):
 if __name__ == "__main__":
   x_all, y_all = extract_data("data_1.csv", "csv")
   params = {"C": 5., "threshold": float("Inf"), "kernel":simple_kernel}
-  with tf.device("/device:GPU:0"):
+  with tf.device("/job:worker/task:0/cpu:0"):
     create_svm_variables(x_all.shape[1])
-    svm_train(x_all, y_all, params)
+    dist_svm_train(x_all, y_all, params)
     # print(svm_eval(x_all[800:], y_all[800:], params, standalone=True))

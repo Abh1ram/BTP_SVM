@@ -1,14 +1,14 @@
 import tensorflow as tf
 
-cluster = tf.train.ClusterSpec({"local": ["localhost:2222", "localhost:2223"]})
+from dist_config import cluster
 
 def f1():
     x = tf.constant(5)
-    with tf.device("/job:local/task:1"):
+    with tf.device("/job:worker/task:1/device:GPU:0"):
         y2 = x - 10
     return y2
 
-with tf.device("/job:local/task:0"):
+with tf.device("/job:worker/task:0/cpu:0"):
     z = f1()
     y = z + 100
 

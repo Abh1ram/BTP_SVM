@@ -14,41 +14,26 @@ and are easily going crazy - ***NUMERIC INSTABILITY***
 
 
 -----------------------
-COMPLETE CV
 
 TODO:
-1 Understand and implement the author's code
-2. Add check that candidate was alrady added in handle_empty_marg,
-    cur_check not good enough for initial g_c=0
 3. Add iterator for getting data for tf instead of the old data loader
 4. When you add classes, rememeber to check that labels are -1,1 and do appropriate scaling and
     scaling back
 
 
-DISTRIB TF:
-1. One of the potentially confusing things with Distributed TensorFlow is that very often, the same code will be sent to all nodes. So your main.py or train.py or whatever you choose to call your script will be sent to the workers and the ps. Environment variables are then used to execute a certain code block on the master node, another on the workers, another on the ps, etc
-
-
-SUMMIT NOTES:
-1. Tasks:
-    i) PS tasks: hold variables and update them
-    ii) Worker tasks: intensive calculations - 
-2. Our code won;t be able to do data-parallelism
-3. Partitioning variables - 13:13
-4. Processes communicate through tf.Server - Need a cluster manager to manage the namespaces
-5. ClusterSpec defines the set of processes/
-6. Server represents task in the cluster
-7. worker tasks create session, while ps tasks just wait using join
-8. Fault tolerance through checkpointing and hooks
-
-
-MORE NOTES:
-1. jobs: random names - like (worker, ps) or just (local)
-2. tasks: actual processes - hostname:port specifiy
-
-
 COMPLETE CV
 -----------------------------------------------------
+28-03
+--
+1. Read paper
+--
+2. Thank author
+3. Start distributed
+
+26-03
+1. Convert to 64 manually and change kernel fn to params everywhere
+2. Add realistic checcks for termination and transferring of candidate - is_close
+
 24-03
 1. Clean up the btp_python code
 2. Test the same changes for tf - first float32 and then float64
@@ -116,6 +101,32 @@ operation
 2.
 ------------------------------- PIVOT ---------------------------
 
+
+DISTRIB TF:
+1. One of the potentially confusing things with Distributed TensorFlow is that very often, the same code will be sent to all nodes. So your main.py or train.py or whatever you choose to call your script will be sent to the workers and the ps. Environment variables are then used to execute a certain code block on the master node, another on the workers, another on the ps, etc
+
+
+SUMMIT NOTES:
+1. Tasks:
+    i) PS tasks: hold variables and update them
+    ii) Worker tasks: intensive calculations - 
+2. Our code won;t be able to do data-parallelism
+3. Partitioning variables - 13:13
+4. Processes communicate through tf.Server - Need a cluster manager to manage the namespaces
+5. ClusterSpec defines the set of processes/
+6. Server represents task in the cluster
+7. worker tasks create session, while ps tasks just wait using join
+8. Fault tolerance through checkpointing and hooks
+
+
+MORE NOTES:
+1. jobs: random names - like (worker, ps) or just (local)
+2. tasks: actual processes - hostname:port specifiy
+
+
+
+
+
 --------PYTORCH--------
 1. Broadcasting
 2. CUDA - automatic synchronization - new operator to create tensor in the same 
@@ -123,4 +134,48 @@ dtype = torch.cuda.FloatTensor
 for cuda, use dataparallel instead of multiprocessing
 3. map function
 
+--------FRAUD TRANSACTION PAPER-----------
+Notes:
+1. class imbalance - more examples of one class than the other
+    (for fraud detection - rather than accuracy, we want more fraud cases to be caught)
+2. concept drift - distribution of target varialbe changes with time
 
+3. verification latency - labels are obtained after delay
+
+Scoring rules and Data-Driven Model - after payment has been registered
+SRs - specific and recurrent fraudster behaviors
+
+Output of system: Top-k risky/suspicious transactions to be verified by the control group - manual investigators
+
+Apache tools:
+1. Kafka - publish-subscribe messaging queue-system;   for fault-tolerant transaction collection.
+
+2. Spark - automatically distributes computation among the resources and aggregates the result.
+    a) aggregate the transactions to do feature engineering
+    b) classification to find fraud risk of a transaction.
+    c) cold storage for Cassandra
+
+3. Cassandra - dist database. Data stored in nodes organized as ring. Key is important for performance.
+    partition key (hour when the transaction was received); 
+    clustering key (order within the partition - timestamp + card identifier)
+
+
+Classifiers:
+1. F_t - trained on the last f days for which feedback is available
+2. D_t - ensemble of balanced random forests - each tree for one day
+
+Concept Drift: is handled using sliding windows. D_t discards old tree(s); F_t is updated
+
+P(+|x_i) = w1 * P_(D_t)(+|x_i) + w2*P_(F_t)(+|x_i)
+
+Scalable BRF for imbalance problem: Subsampling -ve samples (genuine cases) and all fraudulent cases
+
+Data streaming and preprocessing
+
+--RDD -Resilient Distributed dataset -
+    a) helps perform distributed in-memory computations instead of multiple IO ops
+    b) RDDs are Immutable and partitioned collection of records, which can only be created by
+        coarse-grained operation - operations working on entire dataset rather than individual
+        records
+    c) logs trnasformations producing lineage graph which makes it fault-tolerant.
+1. DStream obj - basic abstraction provided by Spark streaming
